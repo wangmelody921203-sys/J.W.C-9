@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EmotionSense AI | 回饋</title>
+  <style>
+    :root {
+      --bg: #091018;
+      --panel: rgba(12, 18, 27, 0.78);
+      --panel-strong: rgba(9, 14, 22, 0.9);
+      --line: rgba(255, 255, 255, 0.08);
+      --accent: #32d97c;
+      --accent-soft: rgba(50, 217, 124, 0.14);
+      --text: #eef2f7;
+      --muted: #91a3b7;
+      --danger: #f87171;
+      --shadow: 0 26px 70px rgba(0, 0, 0, 0.38);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 15%, rgba(50, 217, 124, 0.14), transparent 28%),
+        radial-gradient(circle at 88% 10%, rgba(59, 130, 246, 0.12), transparent 20%),
+        linear-gradient(180deg, #06090e 0%, #0b1018 100%);
+    }
+
+    .page {
+      width: min(1040px, calc(100% - 32px));
+      margin: 26px auto 42px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .topbar a {
+      color: var(--text);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+      padding-bottom: 2px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+    }
+
+    .summary,
+    .form-card {
+      padding: 24px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      padding: 7px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #b8ffd8;
+      background: rgba(50, 217, 124, 0.08);
+      border: 1px solid rgba(50, 217, 124, 0.18);
+    }
+
+    h1 {
+      margin: 16px 0 10px;
+      font-size: clamp(30px, 5vw, 54px);
+      line-height: 1.02;
+      letter-spacing: -0.05em;
+    }
+
+    .lead {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.75;
+      font-size: 14px;
+    }
+
+    .summary-grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .metric {
+      padding: 14px 16px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .metric-label {
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .metric-value {
+      margin-top: 8px;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .notice {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 13px;
+    }
+
+    .section-title {
+      margin: 0 0 6px;
+      font-size: 22px;
+      letter-spacing: -0.03em;
+    }
+
+    .section-copy {
+      margin: 0 0 20px;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .field {
+      margin-bottom: 18px;
+    }
+
+    .label {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .choice-row,
+    .rating-row,
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .choice,
+    .rating-btn {
+      position: relative;
+      flex: 1;
+      min-width: 110px;
+    }
+
+    .choice input,
+    .rating-btn input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .choice span,
+    .rating-btn span {
+      display: block;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+      cursor: pointer;
+      text-align: center;
+      transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s ease;
+    }
+
+    .choice input:checked + span,
+    .rating-btn input:checked + span {
+      border-color: rgba(50, 217, 124, 0.52);
+      background: rgba(50, 217, 124, 0.12);
+      transform: translateY(-1px);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 140px;
+      padding: 14px 16px;
+      resize: vertical;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font: inherit;
+      line-height: 1.7;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: rgba(50, 217, 124, 0.36);
+    }
+
+    .helper {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .btn {
+      appearance: none;
+      border: none;
+      border-radius: 16px;
+      padding: 13px 18px;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      transition: opacity 0.14s ease, transform 0.14s ease;
+    }
+
+    .btn:active { transform: translateY(1px) scale(0.99); }
+    .btn-primary {
+      color: #041109;
+      background: linear-gradient(135deg, #48ef90 0%, #2dc06b 100%);
+    }
+
+    .btn-secondary {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .feedback-status {
+      min-height: 24px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .feedback-status.error { color: #ffb4b4; }
+    .feedback-status.success { color: #b8ffd8; }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="topbar">
+      <span>回饋只收本次摘要，不保留原始影像。</span>
+      <a href="./home.html">回首頁</a>
+    </div>
+
+    <section class="layout">
+      <section class="card summary">
+        <div class="eyebrow">Post Scan Feedback</div>
+        <h1>告訴我們，這次結果有沒有幫上忙。</h1>
+        <p class="lead">你只需要填三個欄位。我們會把這次掃描的摘要連同回饋一起送出，用來做準確度與體驗的後續統計。</p>
+
+        <div class="summary-grid">
+          <div class="metric">
+            <div class="metric-label">本次情緒</div>
+            <div id="summary-emotion" class="metric-value">尚無資料</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">最高佔比</div>
+            <div id="summary-share" class="metric-value">-</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">掃描時間</div>
+            <div id="summary-time" class="metric-value">-</div>
+          </div>
+        </div>
+
+        <div id="queue-notice" class="notice">若送出當下網路中斷，資料會先暫存在本機，之後重新進入回饋頁時會自動重送。</div>
+      </section>
+
+      <section class="card form-card">
+        <h2 class="section-title">本輪回饋</h2>
+        <p class="section-copy">先求穩定收集，欄位固定三項：準不準、滿不滿意、還想補充什麼。</p>
+
+        <form id="feedback-form">
+          <div class="field">
+            <label class="label">1. 這次情緒辨識結果準確嗎？</label>
+            <div class="choice-row">
+              <label class="choice"><input type="radio" name="accuracy" value="yes" required><span>是，算準</span></label>
+              <label class="choice"><input type="radio" name="accuracy" value="no"><span>否，不太準</span></label>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="label">2. 你對這次整體體驗滿意嗎？</label>
+            <div class="rating-row">
+              <label class="rating-btn"><input type="radio" name="satisfaction" value="1" required><span>1</span></label>
+              <label class="rating-btn"><input type="radio" name="satisfaction" value="2"><span>2</span></label>
+              <label class="rating-btn"><input type="radio" name="satisfaction" value="3"><span>3</span></label>
+              <label class="rating-btn"><input type="radio" name="satisfaction" value="4"><span>4</span></label>
+              <label class="rating-btn"><input type="radio" name="satisfaction" value="5"><span>5</span></label>
+            </div>
+            <div class="helper">1 代表很不滿意，5 代表很滿意。</div>
+          </div>
+
+          <div class="field">
+            <label class="label" for="comment">3. 其他想補充的觀察或建議</label>
+            <textarea id="comment" name="comment" maxlength="500" placeholder="例如：這次音樂推薦有貼到情緒，或鏡頭辨識時太容易抓不到臉。"></textarea>
+            <div class="helper">最多 500 字，選填。</div>
+          </div>
+
+          <div class="button-row">
+            <button id="submit-btn" class="btn btn-primary" type="submit">送出回饋</button>
+            <a class="btn btn-secondary" href="./index.html">回到掃描頁</a>
+          </div>
+          <p id="feedback-status" class="feedback-status"></p>
+        </form>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const API_BASE = "https://j-w-c-9.onrender.com";
+    const SCAN_STORAGE_KEY = "emotionSense.latestScan";
+    const PENDING_KEY = "emotionSense.pendingFeedbackQueue";
+    const EMOTION_LABELS_ZH = {
+      happiness: "愉悅",
+      sadness: "悲傷",
+      anger: "憤怒",
+      disgust: "厭惡",
+      fear: "恐懼",
+      contempt: "輕蔑",
+      uncertain: "不確定",
+      unknown: "未知",
+      no_face: "未偵測到臉部",
+      neutral: "中性",
+    };
+
+    const form = document.getElementById("feedback-form");
+    const submitBtn = document.getElementById("submit-btn");
+    const statusEl = document.getElementById("feedback-status");
+    const queueNotice = document.getElementById("queue-notice");
+
+    function getLatestScan() {
+      try {
+        return JSON.parse(sessionStorage.getItem(SCAN_STORAGE_KEY) || "null");
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function renderSummary(scan) {
+      document.getElementById("summary-emotion").textContent = scan
+        ? (EMOTION_LABELS_ZH[scan.emotion] || scan.emotion)
+        : "尚未掃描";
+      document.getElementById("summary-share").textContent = scan
+        ? `${scan.share}%`
+        : "-";
+      document.getElementById("summary-time").textContent = scan
+        ? new Date(scan.timestamp).toLocaleString("zh-TW", { hour12: false })
+        : "-";
+    }
+
+    function readPendingQueue() {
+      try {
+        return JSON.parse(localStorage.getItem(PENDING_KEY) || "[]");
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function writePendingQueue(queue) {
+      localStorage.setItem(PENDING_KEY, JSON.stringify(queue));
+      queueNotice.textContent = queue.length > 0
+        ? `目前有 ${queue.length} 筆本機暫存回饋等待重送。`
+        : "若送出當下網路中斷，資料會先暫存在本機，之後重新進入回饋頁時會自動重送。";
+    }
+
+    async function sendFeedback(payload) {
+      const response = await fetch(`${API_BASE}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "submit_failed");
+      }
+      return data;
+    }
+
+    async function flushPendingQueue() {
+      const queue = readPendingQueue();
+      if (!queue.length) {
+        writePendingQueue([]);
+        return;
+      }
+
+      const remain = [];
+      for (const item of queue) {
+        try {
+          await sendFeedback(item);
+        } catch (_) {
+          remain.push(item);
+        }
+      }
+      writePendingQueue(remain);
+    }
+
+    function setStatus(message, kind) {
+      statusEl.textContent = message;
+      statusEl.className = `feedback-status ${kind || ""}`.trim();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const scan = getLatestScan();
+      const formData = new FormData(form);
+      const payload = {
+        accuracy: formData.get("accuracy"),
+        satisfaction: Number(formData.get("satisfaction")),
+        comment: String(formData.get("comment") || "").trim(),
+        summary: scan,
+        source: "feedback.html",
+        user_agent: navigator.userAgent,
+      };
+
+      submitBtn.disabled = true;
+      setStatus("送出中…", "");
+
+      try {
+        const result = await sendFeedback(payload);
+        setStatus(
+          result.stored === "sheet"
+            ? "回饋已送出並寫入統計。"
+            : "回饋已先暫存，系統稍後會再嘗試寫入統計。",
+          "success"
+        );
+        form.reset();
+      } catch (_) {
+        const queue = readPendingQueue();
+        queue.push(payload);
+        writePendingQueue(queue);
+        setStatus("網路或服務暫時不可用，已先存到本機，之後會自動重送。", "error");
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    renderSummary(getLatestScan());
+    flushPendingQueue();
+  </script>
+</body>
+</html>

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import time
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
@@ -81,6 +84,84 @@ _SYSTEM_PROMPT = """\
 5. 只用繁體中文回覆。
 """
 
+FEEDBACK_QUEUE_FILE = Path("emotion_output/pending_feedback.jsonl")
+FEEDBACK_WEBHOOK_ENV = "FEEDBACK_WEBHOOK_URL"
+
+
+def _append_pending_feedback(payload: dict) -> None:
+    FEEDBACK_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with FEEDBACK_QUEUE_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _load_pending_feedback() -> list[dict]:
+    if not FEEDBACK_QUEUE_FILE.exists():
+        return []
+
+    rows: list[dict] = []
+    with FEEDBACK_QUEUE_FILE.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def _write_pending_feedback(rows: list[dict]) -> None:
+    if not rows:
+        if FEEDBACK_QUEUE_FILE.exists():
+            FEEDBACK_QUEUE_FILE.unlink()
+        return
+
+    FEEDBACK_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with FEEDBACK_QUEUE_FILE.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _forward_feedback(payload: dict) -> bool:
+    webhook_url = os.environ.get(FEEDBACK_WEBHOOK_ENV, "").strip()
+    if not webhook_url:
+        return False
+
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        webhook_url,
+        data=body,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return 200 <= response.status < 300
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return False
+
+
+def _flush_pending_feedback() -> int:
+    webhook_url = os.environ.get(FEEDBACK_WEBHOOK_ENV, "").strip()
+    if not webhook_url:
+        return 0
+
+    pending = _load_pending_feedback()
+    if not pending:
+        return 0
+
+    remain: list[dict] = []
+    flushed = 0
+    for row in pending:
+        if _forward_feedback(row):
+            flushed += 1
+        else:
+            remain.append(row)
+
+    _write_pending_feedback(remain)
+    return flushed
+
 # Load once at startup so requests are fast.
 MODEL_PATH = ensure_model(Path("models/emotion-ferplus-8.onnx"))
 DETECTOR = load_face_detector()
@@ -93,7 +174,7 @@ def index():
         {
             "service": "emotion-api",
             "status": "ok",
-            "endpoints": ["/health", "/detect"],
+            "endpoints": ["/health", "/detect", "/generate", "/feedback"],
         }
     )
 
@@ -232,13 +313,68 @@ def generate():
             timeout=4.0,          # 4 秒硬超時
         )
         reply = completion.choices[0].message.content.strip()
-    except Exception as e:
-        return jsonify({"error": "groq_error", "detail": str(e), "fallback": "我聽到了，你不需要一個人扛著。"}), 500
+    except Exception:
+        app.logger.exception("Groq generate failed")
+        return jsonify({"error": "groq_error", "fallback": "我聽到了，你不需要一個人扛著。"}), 500
 
     if not reply:
         reply = "我聽到了，你不需要一個人扛著。"  # 超時或失敗的固定回退文案
 
     return jsonify({"reply": reply, "emotion": emotion})
+
+
+@app.post("/feedback")
+def feedback():
+    payload = request.get_json(silent=True) or {}
+
+    accuracy = str(payload.get("accuracy", "")).strip().lower()
+    if accuracy not in {"yes", "no"}:
+        return jsonify({"error": "invalid_accuracy"}), 400
+
+    try:
+        satisfaction = int(payload.get("satisfaction", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid_satisfaction"}), 400
+
+    if not 1 <= satisfaction <= 5:
+        return jsonify({"error": "invalid_satisfaction"}), 400
+
+    comment = str(payload.get("comment", "")).strip()
+    if len(comment) > 500:
+        comment = comment[:500]
+
+    summary = payload.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+
+    emotion = str(summary.get("emotion", "unknown")).strip().lower()
+    if emotion not in _ALLOWED_EMOTIONS:
+        emotion = "unknown"
+
+    try:
+        share = float(summary.get("share", 0))
+    except (TypeError, ValueError):
+        share = 0.0
+
+    record = {
+        "accuracy": accuracy,
+        "satisfaction": satisfaction,
+        "comment": comment,
+        "summary": {
+            "emotion": emotion,
+            "share": round(max(0.0, share), 1),
+            "timestamp": str(summary.get("timestamp", "")).strip(),
+        },
+        "source": str(payload.get("source", "feedback.html")).strip()[:80],
+        "received_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ip_hint": request.remote_addr or "unknown",
+    }
+
+    flushed_pending = _flush_pending_feedback()
+    if _forward_feedback(record):
+        return jsonify({"ok": True, "stored": "sheet", "flushed_pending": flushed_pending})
+
+    _append_pending_feedback(record)
+    return jsonify({"ok": True, "stored": "local", "flushed_pending": flushed_pending}), 202
 
 
 if __name__ == "__main__":

@@ -772,6 +772,7 @@
 
   <script>
     const API_BASE = "https://j-w-c-9.onrender.com";
+    const SCAN_STORAGE_KEY = "emotionSense.latestScan";
     const WINDOW_MS = 5000;
     const CAPTURE_MS = 850;
     const CAPTURE_W = 320;
@@ -972,6 +973,21 @@
       scanCaption.textContent = message;
     }
 
+    function persistLatestScan(summary) {
+      try {
+        sessionStorage.setItem(SCAN_STORAGE_KEY, JSON.stringify(summary));
+      } catch (_) {
+        // sessionStorage 不可用時，不中斷主流程
+      }
+    }
+
+    function redirectToFeedback(summary) {
+      persistLatestScan(summary);
+      setTimeout(() => {
+        window.location.href = "./feedback.html";
+      }, 1400);
+    }
+
     function clearFaceOverlay() {
       const ctx = faceOverlay.getContext("2d");
       const width = faceOverlay.clientWidth || 1;
@@ -1134,13 +1150,19 @@
       updateResultCard(resolvedEmotion, share);
       renderProbabilityList(lastProbabilities);
       renderMusic(resolvedEmotion);
-      stopCameraSession("掃描完成。本輪分析已結束，鏡頭已自動關閉。");
+      const latestScan = {
+        emotion: resolvedEmotion,
+        share,
+        timestamp: new Date().toISOString(),
+      };
+      stopCameraSession("掃描完成。本輪分析已結束，1.4 秒後將前往回饋頁。");
       timerCaption.textContent = "掃描視窗 5 秒";
       resetVotes();
       // 通知桌寵：掃描完成，帶入本次情緒，解除勿擾
       if (typeof window.__petHookFinalize === "function") {
         window.__petHookFinalize(resolvedEmotion);
       }
+      redirectToFeedback(latestScan);
     }
 
     async function startAutoScan() {

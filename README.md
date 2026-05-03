@@ -59,6 +59,14 @@
 - 程式會每秒輸出 15 秒統計結果到 emotion_output/latest_emotion.json
 - 欄位包含 dominant_emotion、dominant_share、vote_ratios、probability_ratios
 
+## 三頁流程
+
+目前流程為：
+
+1. home.html：封面首頁，可播放 white-noise.mp3 白噪音，並記住開關偏好
+2. index.html：5 秒情緒辨識主頁，完成後會自動前往 feedback.html
+3. feedback.html：收集準確度、滿意度、文字意見，提交到後端統計
+
 ## PHP + Spotify 網頁
 
 1. 先啟動情緒辨識程式（讓 JSON 持續更新）
@@ -110,3 +118,40 @@
 
 - 桌寵對話**不儲存於伺服器**，僅在前端當次會話中保留歷史。
 - 關閉或重新整理頁面後對話記錄即消失。
+
+## 回饋統計
+
+- 前端會把本次掃描摘要暫存在 sessionStorage，並在 feedback.html 顯示。
+- 回饋 API 為 `/feedback`，由後端代理轉送到 Google Sheet。
+- 建議在 Render 環境變數設定 `FEEDBACK_WEBHOOK_URL`，值填入 Google Apps Script Web App 的 webhook URL。
+- 若 Google Sheet 當下不可寫入，後端會先把資料暫存在 emotion_output/pending_feedback.jsonl，之後有新回饋進來時會自動重送。
+- 若使用者送出當下網路中斷，前端也會先暫存在 localStorage，重新打開 feedback.html 時會自動重送。
+
+### Google Sheet 設定方式
+
+1. 建立一份新的 Google Sheet。
+2. 打開「擴充功能 → Apps Script」。
+3. 把專案中的 [feedback_webhook.gs](feedback_webhook.gs) 內容貼進去並儲存。
+4. 在 Apps Script 右上角選「部署 → 新增部署」。
+5. 類型選「網頁應用程式」。
+6. Execute as 選「Me」，Who has access 選「Anyone」。
+7. 部署後複製 Web App URL。
+8. 到 Render 的環境變數新增 `FEEDBACK_WEBHOOK_URL=你的 Web App URL`。
+
+### Google Sheet 欄位
+
+- server_received_at
+- client_received_at
+- source
+- ip_hint
+- accuracy
+- satisfaction
+- comment
+- emotion
+- share
+- scan_timestamp
+
+## 白噪音音檔
+
+- 首頁預設讀取專案根目錄的 white-noise.mp3。
+- 如果目前還沒放入音檔，首頁仍可正常進入，只是白噪音會顯示未就緒。

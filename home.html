@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EmotionSense AI | 首頁</title>
+  <style>
+    :root {
+      --bg: #08111a;
+      --bg-soft: #102033;
+      --panel: rgba(10, 18, 28, 0.76);
+      --panel-strong: rgba(7, 12, 20, 0.88);
+      --line: rgba(255, 255, 255, 0.08);
+      --text: #f4f7fb;
+      --muted: #9fb0c5;
+      --accent: #79e1c2;
+      --accent-2: #f5d06f;
+      --shadow: 0 32px 80px rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+
+    body {
+      font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 20%, rgba(121, 225, 194, 0.18), transparent 28%),
+        radial-gradient(circle at 85% 12%, rgba(245, 208, 111, 0.12), transparent 20%),
+        linear-gradient(180deg, #08111a 0%, #0e1824 45%, #111a27 100%);
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+      background-size: 100% 5px, 5px 100%;
+      opacity: 0.18;
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 28px auto 42px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+    }
+
+    .intro {
+      padding: 28px;
+      min-height: 520px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 13px;
+      border-radius: 999px;
+      color: #d8fff2;
+      border: 1px solid rgba(121, 225, 194, 0.22);
+      background: rgba(121, 225, 194, 0.08);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 18px 0 12px;
+      font-size: clamp(36px, 6vw, 72px);
+      line-height: 0.96;
+      letter-spacing: -0.05em;
+    }
+
+    .accent { color: var(--accent); }
+
+    .lead {
+      margin: 0;
+      max-width: 55ch;
+      color: var(--muted);
+      line-height: 1.85;
+      font-size: 15px;
+    }
+
+    .pill-row,
+    .stats-row,
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .pill,
+    .stat,
+    .note {
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .pill {
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #dce8f5;
+    }
+
+    .stats-row { margin-top: 26px; }
+
+    .stat {
+      padding: 14px 16px;
+      min-width: 160px;
+      flex: 1;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      margin-top: 8px;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .actions { margin-top: 30px; }
+
+    .btn {
+      appearance: none;
+      border: none;
+      border-radius: 18px;
+      padding: 14px 20px;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      text-decoration: none;
+      transition: transform 0.14s ease, opacity 0.14s ease, box-shadow 0.14s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .btn:hover { opacity: 0.96; }
+    .btn:active { transform: translateY(1px) scale(0.99); }
+
+    .btn-primary {
+      color: #05110b;
+      background: linear-gradient(135deg, var(--accent) 0%, #63d8b5 100%);
+      box-shadow: 0 18px 40px rgba(121, 225, 194, 0.18);
+    }
+
+    .btn-secondary {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .sound-panel {
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      background:
+        radial-gradient(circle at 80% 15%, rgba(121, 225, 194, 0.16), transparent 26%),
+        linear-gradient(180deg, rgba(7, 12, 20, 0.88), rgba(10, 16, 24, 0.92));
+    }
+
+    .sound-orb {
+      min-height: 200px;
+      border-radius: 28px;
+      border: 1px solid rgba(121, 225, 194, 0.12);
+      background:
+        radial-gradient(circle at center, rgba(121, 225, 194, 0.22), rgba(121, 225, 194, 0.02) 36%, transparent 54%),
+        radial-gradient(circle at center, rgba(245, 208, 111, 0.12), transparent 58%),
+        rgba(255, 255, 255, 0.02);
+      display: grid;
+      place-items: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .sound-orb::before,
+    .sound-orb::after {
+      content: "";
+      position: absolute;
+      border-radius: 999px;
+      border: 1px solid rgba(121, 225, 194, 0.14);
+      inset: 24px;
+      animation: pulse 4.6s ease-out infinite;
+    }
+
+    .sound-orb::after {
+      inset: 48px;
+      animation-delay: 1.2s;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.96); opacity: 0.18; }
+      50% { transform: scale(1.03); opacity: 0.36; }
+      100% { transform: scale(0.96); opacity: 0.18; }
+    }
+
+    .orb-copy {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      width: min(280px, calc(100% - 32px));
+    }
+
+    .orb-copy strong {
+      display: block;
+      font-size: 20px;
+      margin-bottom: 6px;
+    }
+
+    .orb-copy span {
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .control-card {
+      padding: 18px;
+      border-radius: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .control-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .control-title {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .control-copy {
+      margin: 6px 0 0;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .toggle {
+      min-width: 104px;
+    }
+
+    .note {
+      padding: 14px 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .note strong { color: var(--text); }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; }
+      .intro { min-height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <section class="panel intro">
+        <div>
+          <div class="eyebrow">EmotionSense AI</div>
+          <h1>先不用解釋。<br><span class="accent">讓系統先陪你進場。</span></h1>
+          <p class="lead">
+            這是一個低摩擦的情緒辨識入口頁。你只需要進入掃描，系統會在 5 秒內完成本輪分析、提供音樂推薦，並在最後請你用三個欄位給一點回饋，幫我們把模型和流程調整得更準。
+          </p>
+          <div class="stats-row">
+            <div class="stat">
+              <div class="stat-label">流程</div>
+              <div class="stat-value">首頁 → 掃描 → 回饋</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">辨識時間</div>
+              <div class="stat-value">5 秒完成</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">資料原則</div>
+              <div class="stat-value">影像不落地</div>
+            </div>
+          </div>
+          <div class="pill-row" style="margin-top: 22px;">
+            <div class="pill">白噪音可關閉</div>
+            <div class="pill">記住你的偏好</div>
+            <div class="pill">結果後立即回饋</div>
+            <div class="pill">Spotify 推薦延續主流程</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <a class="btn btn-primary" href="./index.html">開始情緒掃描</a>
+          <a class="btn btn-secondary" href="./feedback.html">直接看回饋頁</a>
+        </div>
+      </section>
+
+      <section class="panel sound-panel">
+        <div class="sound-orb">
+          <div class="orb-copy">
+            <strong>白噪音緩衝區</strong>
+            <span>進入辨識前，先用一段平穩底噪把環境收斂下來。你可以保留，也可以隨時關掉。</span>
+          </div>
+        </div>
+
+        <section class="control-card">
+          <div class="control-header">
+            <div>
+              <h2 class="control-title">播放控制</h2>
+              <p class="control-copy">首頁會優先套用你上一次的偏好。若瀏覽器阻擋自動播放，按一下按鈕就會開始。</p>
+            </div>
+            <button id="noise-toggle" class="btn btn-primary toggle" type="button">白噪音開啟</button>
+          </div>
+        </section>
+
+        <section class="control-card">
+          <div class="control-header">
+            <div>
+              <h2 class="control-title">目前狀態</h2>
+              <p id="noise-status" class="control-copy">正在讀取音訊設定…</p>
+            </div>
+            <button id="noise-play-once" class="btn btn-secondary" type="button">重新播放</button>
+          </div>
+        </section>
+
+        <div class="note">
+          <strong>音檔位置：</strong>首頁會讀取專案根目錄的 white-noise.mp3。若目前還沒放入檔案，頁面仍可使用，只是白噪音會顯示為未就緒。
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <audio id="white-noise" loop preload="auto">
+    <source src="./white-noise.mp3" type="audio/mpeg">
+  </audio>
+
+  <script>
+    const STORAGE_KEY = "emotionSense.whiteNoiseMuted";
+    const audioEl = document.getElementById("white-noise");
+    const toggleBtn = document.getElementById("noise-toggle");
+    const playOnceBtn = document.getElementById("noise-play-once");
+    const statusEl = document.getElementById("noise-status");
+    let audioReady = true;
+
+    function isMutedPreferred() {
+      return localStorage.getItem(STORAGE_KEY) === "true";
+    }
+
+    function persistPreference(muted) {
+      localStorage.setItem(STORAGE_KEY, muted ? "true" : "false");
+    }
+
+    function syncUi() {
+      const muted = isMutedPreferred();
+      toggleBtn.textContent = muted ? "白噪音關閉" : "白噪音開啟";
+      if (!audioReady) {
+        statusEl.textContent = "找不到 white-noise.mp3；先把音檔放到專案根目錄，白噪音功能就會啟用。";
+        return;
+      }
+      statusEl.textContent = muted
+        ? "你目前選擇關閉白噪音，進入頁面後也會維持關閉。"
+        : "白噪音偏好已開啟；若瀏覽器允許，會在首頁自動播放。";
+    }
+
+    async function tryPlay() {
+      if (audioEl.error) {
+        audioReady = false;
+        syncUi();
+        return;
+      }
+      if (isMutedPreferred()) {
+        audioEl.pause();
+        return;
+      }
+      try {
+        audioEl.volume = 0.35;
+        await audioEl.play();
+        statusEl.textContent = "白噪音播放中；你可以保留它，也可以直接關掉。";
+      } catch (_) {
+        statusEl.textContent = "瀏覽器暫時阻擋自動播放，按一下『重新播放』即可開始。";
+      }
+    }
+
+    toggleBtn.addEventListener("click", async () => {
+      const nextMuted = !isMutedPreferred();
+      persistPreference(nextMuted);
+      syncUi();
+      if (nextMuted) {
+        audioEl.pause();
+      } else {
+        await tryPlay();
+      }
+    });
+
+    playOnceBtn.addEventListener("click", async () => {
+      persistPreference(false);
+      syncUi();
+      await tryPlay();
+    });
+
+    audioEl.addEventListener("error", () => {
+      audioReady = false;
+      syncUi();
+    });
+
+    if (audioEl.error) {
+      audioReady = false;
+    }
+    syncUi();
+    tryPlay();
+  </script>
+</body>
+</html>
