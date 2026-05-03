@@ -225,7 +225,7 @@ def generate():
 
     try:
         completion = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",
             messages=groq_messages,
             max_tokens=120,       # 限制每輪回覆長度
             temperature=0.75,
