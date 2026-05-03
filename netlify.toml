@@ -5,8 +5,3 @@
   from = "/"
   to = "/home.html"
   status = 301
-
-[[redirects]]
-  from = "/index.html"
-  to = "/home.html"
-  status = 301
