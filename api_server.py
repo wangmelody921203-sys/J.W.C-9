@@ -232,8 +232,8 @@ def generate():
             timeout=4.0,          # 4 秒硬超時
         )
         reply = completion.choices[0].message.content.strip()
-    except Exception:
-        reply = None
+    except Exception as e:
+        return jsonify({"error": "groq_error", "detail": str(e), "fallback": "我聽到了，你不需要一個人扛著。"}), 500
 
     if not reply:
         reply = "我聽到了，你不需要一個人扛著。"  # 超時或失敗的固定回退文案
