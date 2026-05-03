@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# 模型大檔（Render 部署時自動下載）
+models/emotion-ferplus-8.onnx
+
+# 情緒輸出（執行時動態產生）
+emotion_output/
+
+# 敏感設定
+.env
+spotify_config.php
+
+# 系統
+.DS_Store
+Thumbs.db

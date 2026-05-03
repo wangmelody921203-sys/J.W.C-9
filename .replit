@@ -1,0 +1,15 @@
+run = "php -S 0.0.0.0:8080"
+entrypoint = "index.php"
+
+[deployment]
+run = ["sh", "-c", "php -S 0.0.0.0:8080"]
+
+[env]
+PYTHONPATH = "."
+
+[nix]
+channel = "stable-24_05"
+
+[[ports]]
+localPort = 8080
+externalPort = 80

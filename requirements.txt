@@ -1,0 +1,8 @@
+opencv-python-headless
+onnxruntime
+numpy
+flask
+flask-cors
+gunicorn
+groq>=0.9.0
+flask-limiter>=3.5.0

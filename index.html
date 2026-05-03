@@ -1,0 +1,1330 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EmotionSense AI</title>
+  <style>
+    :root {
+      --bg: #06080d;
+      --bg-soft: #0c1017;
+      --panel: rgba(13, 18, 27, 0.72);
+      --panel-strong: rgba(10, 15, 23, 0.84);
+      --border: rgba(255, 255, 255, 0.08);
+      --accent: #32d97c;
+      --accent-soft: rgba(50, 217, 124, 0.18);
+      --text: #eef2f7;
+      --muted: #94a3b8;
+      --danger: #f87171;
+      --shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+    }
+
+    body {
+      font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(50, 217, 124, 0.12), transparent 28%),
+        radial-gradient(circle at 85% 20%, rgba(59, 130, 246, 0.08), transparent 22%),
+        linear-gradient(180deg, #05070b 0%, #090d14 100%);
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background-image: linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+      background-size: 100% 4px;
+      opacity: 0.18;
+      pointer-events: none;
+    }
+
+    .safety-banner {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      padding: 12px 18px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      color: #b8ffd8;
+      background: rgba(10, 18, 14, 0.86);
+      border-bottom: 1px solid rgba(50, 217, 124, 0.2);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 28px auto 48px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .glass-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+      border-radius: 28px;
+    }
+
+    .intro,
+    .result-panel,
+    .music-panel {
+      padding: 22px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #b9ffd7;
+      background: rgba(50, 217, 124, 0.08);
+      border: 1px solid rgba(50, 217, 124, 0.14);
+    }
+
+    h1 {
+      margin: 18px 0 10px;
+      font-size: clamp(32px, 5vw, 54px);
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+    }
+
+    .headline-accent {
+      color: var(--accent);
+      text-shadow: 0 0 26px rgba(50, 217, 124, 0.28);
+    }
+
+    .hero-copy {
+      margin: 0;
+      max-width: 56ch;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .feature-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .feature-pill {
+      padding: 9px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #d9e3ef;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .scanner {
+      padding: 18px;
+    }
+
+    .scanner-shell {
+      position: relative;
+      overflow: hidden;
+      border-radius: 24px;
+      background: #020303;
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      box-shadow: inset 0 0 0 1px rgba(50, 217, 124, 0.08);
+      aspect-ratio: 4 / 3;
+    }
+
+    #camera-video,
+    #face-overlay,
+    .scanner-idle {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #camera-video {
+      object-fit: cover;
+      transform: scaleX(-1);
+      display: none;
+    }
+
+    .scanner-idle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px;
+      text-align: center;
+      color: var(--muted);
+      background:
+        radial-gradient(circle at center, rgba(50, 217, 124, 0.09), transparent 36%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.01), rgba(255, 255, 255, 0.02));
+    }
+
+    .scanner-idle strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text);
+      font-size: 18px;
+    }
+
+    #face-overlay {
+      pointer-events: none;
+      transform: scaleX(-1);
+    }
+
+    .scan-effect,
+    .scan-effect::before,
+    .scan-effect::after {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .scan-effect.active,
+    .scan-effect.active::before,
+    .scan-effect.active::after {
+      opacity: 1;
+    }
+
+    .scan-effect::before {
+      content: "";
+      background-image: repeating-linear-gradient(
+        to bottom,
+        rgba(255, 255, 255, 0.045) 0,
+        rgba(255, 255, 255, 0.045) 1px,
+        transparent 1px,
+        transparent 4px
+      );
+      mix-blend-mode: screen;
+    }
+
+    .scan-effect::after {
+      content: "";
+      top: -18%;
+      bottom: auto;
+      height: 32%;
+      background: linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(50, 217, 124, 0.02) 15%,
+        rgba(50, 217, 124, 0.16) 48%,
+        rgba(50, 217, 124, 0.04) 80%,
+        transparent 100%
+      );
+      box-shadow: 0 0 24px rgba(50, 217, 124, 0.22);
+      animation: scan-sweep 2s linear infinite;
+    }
+
+    @keyframes scan-sweep {
+      from {
+        transform: translateY(-8%);
+      }
+      to {
+        transform: translateY(320%);
+      }
+    }
+
+    .scanner-meta {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      appearance: none;
+      border: none;
+      border-radius: 16px;
+      padding: 12px 18px;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
+    }
+
+    .btn:hover {
+      opacity: 0.94;
+    }
+
+    .btn:active {
+      transform: translateY(1px) scale(0.99);
+    }
+
+    .btn-primary {
+      color: #041109;
+      background: linear-gradient(135deg, #48ef90 0%, #2dc06b 100%);
+      box-shadow: 0 16px 30px rgba(50, 217, 124, 0.2);
+    }
+
+    .btn-secondary {
+      color: #ffd5d5;
+      background: rgba(248, 113, 113, 0.12);
+      border: 1px solid rgba(248, 113, 113, 0.25);
+    }
+
+    .progress {
+      position: relative;
+      height: 6px;
+      margin-top: 16px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(50, 217, 124, 0.45), #3bf08f);
+      box-shadow: 0 0 20px rgba(50, 217, 124, 0.32);
+    }
+
+    .result-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .result-card {
+      min-height: 184px;
+      padding: 18px;
+      border-radius: 24px;
+      background: var(--panel-strong);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+
+    .result-label {
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .emotion-value {
+      margin-top: 16px;
+      font-size: clamp(30px, 4vw, 46px);
+      font-weight: 900;
+      letter-spacing: -0.05em;
+      min-height: 58px;
+      color: var(--accent);
+      text-shadow: 0 0 26px rgba(50, 217, 124, 0.2);
+    }
+
+    .emotion-value.reveal {
+      animation: reveal 0.55s ease forwards;
+    }
+
+    @keyframes reveal {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+        filter: blur(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+        filter: blur(0);
+      }
+    }
+
+    .emotion-share {
+      margin-top: 8px;
+      color: #dbe7f3;
+      font-size: 15px;
+      min-height: 24px;
+    }
+
+    .status-box {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 74px;
+    }
+
+    .prob-list {
+      margin-top: 18px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .prob-row {
+      display: grid;
+      grid-template-columns: 82px 1fr 50px;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+    }
+
+    .prob-name {
+      color: var(--muted);
+      text-transform: capitalize;
+    }
+
+    .prob-track {
+      height: 6px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .prob-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(50, 217, 124, 0.45), #45f090);
+      transition: width 0.4s ease;
+    }
+
+    .prob-value {
+      text-align: right;
+      color: #dbe7f3;
+    }
+
+    .music-panel {
+      margin-top: 18px;
+    }
+
+    .music-header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .music-title {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: -0.03em;
+    }
+
+    .music-subtitle {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .music-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+    }
+
+    .music-card {
+      border-radius: 20px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .music-card iframe {
+      display: block;
+      width: 100%;
+      border: 0;
+      background: #111;
+    }
+
+    .music-card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+    }
+
+    .music-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: #f8fbff;
+    }
+
+    .music-open {
+      color: #041109;
+      background: linear-gradient(135deg, #48ef90 0%, #2dc06b 100%);
+      padding: 7px 12px;
+      border-radius: 999px;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .hidden-canvas {
+      display: none;
+    }
+
+    @media (max-width: 900px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .result-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* ── 桌寵 ── */
+    .pet-trigger {
+      position: fixed;
+      bottom: 28px;
+      right: 28px;
+      z-index: 100;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #2dc06b, #1a9950);
+      box-shadow: 0 8px 28px rgba(50, 217, 124, 0.35);
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+      animation: pet-breathe 3.6s ease-in-out infinite;
+    }
+    .pet-trigger:hover {
+      transform: scale(1.1);
+      box-shadow: 0 12px 36px rgba(50, 217, 124, 0.5);
+    }
+    .pet-trigger.dnd {
+      opacity: 0.38;
+      animation: none;
+      pointer-events: none;
+    }
+    @keyframes pet-breathe {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.06); }
+    }
+
+    .pet-panel {
+      position: fixed;
+      bottom: 102px;
+      right: 28px;
+      z-index: 101;
+      width: min(360px, calc(100vw - 32px));
+      max-height: 520px;
+      display: flex;
+      flex-direction: column;
+      background: rgba(10, 15, 23, 0.92);
+      border: 1px solid rgba(50, 217, 124, 0.22);
+      border-radius: 24px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      transform-origin: bottom right;
+      transform: scale(0.85) translateY(16px);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.22s ease, opacity 0.22s ease;
+    }
+    .pet-panel.open {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .pet-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      flex-shrink: 0;
+    }
+    .pet-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--accent);
+    }
+    .pet-subtitle {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .pet-close {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 8px;
+      transition: color 0.12s ease;
+    }
+    .pet-close:hover { color: var(--text); }
+
+    .pet-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 14px 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .pet-messages::-webkit-scrollbar { width: 4px; }
+    .pet-messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+    .pet-bubble {
+      max-width: 88%;
+      padding: 10px 13px;
+      border-radius: 16px;
+      font-size: 13.5px;
+      line-height: 1.55;
+      animation: bubble-in 0.22s ease forwards;
+    }
+    @keyframes bubble-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .pet-bubble.pet  {
+      background: rgba(50, 217, 124, 0.1);
+      border: 1px solid rgba(50, 217, 124, 0.18);
+      color: #d4f8e8;
+      align-self: flex-start;
+    }
+    .pet-bubble.user {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      color: var(--text);
+      align-self: flex-end;
+    }
+    .pet-bubble.loading {
+      background: rgba(50, 217, 124, 0.06);
+      border: 1px solid rgba(50, 217, 124, 0.1);
+      color: var(--muted);
+      align-self: flex-start;
+      font-style: italic;
+    }
+
+    .pet-input-row {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      flex-shrink: 0;
+    }
+    .pet-input {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      border-radius: 12px;
+      padding: 9px 13px;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+      resize: none;
+      transition: border-color 0.15s ease;
+    }
+    .pet-input:focus { border-color: rgba(50, 217, 124, 0.4); }
+    .pet-input::placeholder { color: var(--muted); }
+    .pet-send {
+      flex-shrink: 0;
+      width: 38px;
+      height: 38px;
+      border: none;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #48ef90, #2dc06b);
+      color: #041109;
+      font-size: 17px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.12s ease;
+      align-self: flex-end;
+    }
+    .pet-send:disabled { opacity: 0.4; cursor: default; }
+  </style>
+</head>
+<body>
+  <div class="safety-banner">本產品不儲存影像資料；辨識過程僅用於即時分析並於完成後丟棄。</div>
+
+  <main class="page">
+    <section class="hero">
+      <div class="glass-card intro">
+        <div class="eyebrow">Emotion Analysis Engine</div>
+        <h1>深曜黑介面下的 <span class="headline-accent">5 秒情緒掃描</span></h1>
+        <p class="hero-copy">
+          開啟鏡頭後即自動開始分析，不再需要多按一次開始偵測。系統會在 5 秒內持續聚合結果、自動圈出臉部位置，並於掃描結束後給出本輪專屬的 Spotify 內嵌推薦。
+        </p>
+        <div class="feature-row">
+          <div class="feature-pill">Obsidian Black</div>
+          <div class="feature-pill">Backdrop Blur Glass</div>
+          <div class="feature-pill">Face Box Overlay</div>
+          <div class="feature-pill">Auto Stop in 5s</div>
+        </div>
+      </div>
+
+      <section class="glass-card scanner">
+        <div class="scanner-shell">
+          <video id="camera-video" autoplay playsinline muted></video>
+          <canvas id="face-overlay"></canvas>
+          <div id="scan-effect" class="scan-effect"></div>
+          <div id="scanner-idle" class="scanner-idle">
+            <div>
+              <strong>準備啟動鏡頭</strong>
+              點擊下方按鈕後，系統會立即進入 5 秒掃描並自動完成本輪分析。
+            </div>
+          </div>
+        </div>
+
+        <div class="scanner-meta">
+          <span id="scan-caption">等待開啟鏡頭</span>
+          <span id="timer-caption">掃描視窗 5 秒</span>
+        </div>
+
+        <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+
+        <div class="controls">
+          <button id="open-camera" class="btn btn-primary">開啟鏡頭並自動掃描</button>
+          <button id="stop-camera" class="btn btn-secondary" style="display:none">中止本輪掃描</button>
+        </div>
+      </section>
+    </section>
+
+    <section class="result-grid" style="margin-top: 18px;">
+      <section class="glass-card result-panel">
+        <div class="result-label">Dominant Emotion</div>
+        <div id="emotion-value" class="emotion-value">等待掃描</div>
+        <div id="emotion-share" class="emotion-share">尚未產生本輪結果</div>
+        <div id="status-box" class="status-box">請先開啟鏡頭。啟動後會立刻進入 5 秒偵測，結束後自動關閉攝影機。</div>
+      </section>
+
+      <section class="glass-card result-panel">
+        <div class="result-label">Probability Distribution</div>
+        <div id="prob-list" class="prob-list"></div>
+      </section>
+    </section>
+
+    <section class="glass-card music-panel">
+      <div class="music-header">
+        <div>
+          <h2 class="music-title">本輪情緒的 Spotify 內嵌推薦</h2>
+          <p id="music-subtitle" class="music-subtitle">每次掃描會從對應情緒池中隨機抽取不同曲目，避免固定死歌單。</p>
+        </div>
+      </div>
+      <div id="music-grid" class="music-grid"></div>
+    </section>
+  </main>
+
+  <canvas id="capture-canvas" class="hidden-canvas"></canvas>
+
+  <!-- ── AI 桌寵 ── -->
+  <button id="pet-trigger" class="pet-trigger" aria-label="開啟陰晴桌寵">🐾</button>
+
+  <div id="pet-panel" class="pet-panel" role="dialog" aria-label="陰晴 AI 桌寵">
+    <div class="pet-header">
+      <div>
+        <div class="pet-title">陰晴 🌿</div>
+        <div class="pet-subtitle">陪伴夥伴・非心理諮商</div>
+      </div>
+      <button id="pet-close" class="pet-close" aria-label="關閉">✕</button>
+    </div>
+    <div id="pet-messages" class="pet-messages"></div>
+    <div class="pet-input-row">
+      <textarea id="pet-input" class="pet-input" rows="1"
+        placeholder="說點什麼…（Enter 送出）" maxlength="500"></textarea>
+      <button id="pet-send" class="pet-send" aria-label="送出">↑</button>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "https://j-w-c-3.onrender.com";
+    const WINDOW_MS = 5000;
+    const CAPTURE_MS = 850;
+    const CAPTURE_W = 320;
+    const MUSIC_CARD_COUNT = 3;
+
+    const EMOTION_LABELS_ZH = {
+      happiness: "愉悅",
+      sadness: "悲傷",
+      anger: "憤怒",
+      disgust: "厭惡",
+      fear: "恐懼",
+      contempt: "輕蔑",
+      uncertain: "不確定",
+      unknown: "未知",
+      no_face: "未偵測到臉部",
+    };
+
+    const MUSIC_POOLS = {
+      happiness: [
+        { title: "Blinding Lights", type: "track", id: "0VjIjW4GlUZAMYd2vXMi3b" },
+        { title: "Levitating", type: "track", id: "463CkQjx2Zk1yXoBuierM9" },
+        { title: "As It Was", type: "track", id: "4LRPiXqCikLlN15c3yImP7" },
+        { title: "Watermelon Sugar", type: "track", id: "6UelLqGlWMcVH1E5c4H7lY" },
+        { title: "Can't Stop The Feeling!", type: "track", id: "1WkMMavIMc4JZ8cfMmxHkI" },
+        { title: "Shut Up and Dance", type: "track", id: "2DEZmgHKAvm41k4J3R2E9Y" },
+      ],
+      sadness: [
+        { title: "Someone Like You", type: "track", id: "4kflIGfjdZJW4ot2ioixTB" },
+        { title: "drivers license", type: "track", id: "5wANPM4fQCJwkGd4rN57mH" },
+        { title: "Heather", type: "track", id: "4xqrdfXkTW4T0RauPLv3WA" },
+        { title: "All I Want", type: "track", id: "3moR6A8kCWHXQ6dS2x1xup" },
+        { title: "Let Her Go", type: "track", id: "2jyjQ79b6zLBxSqpTS2pZp" },
+        { title: "Say You Won't Let Go", type: "track", id: "5uCax9HTNlzGybIStD3vDh" },
+      ],
+      anger: [
+        { title: "Believer", type: "track", id: "0pqnGHJpmpxLKifKRmU6WP" },
+        { title: "Stronger", type: "track", id: "1nInOsHbtotAmEOQhtvnzP" },
+        { title: "Numb", type: "track", id: "2nLtzopw4rPReszdYBJU6h" },
+        { title: "HUMBLE.", type: "track", id: "7KXjTSCq5nL1LoYtL7XAwS" },
+        { title: "POWER", type: "track", id: "2gZUPNdnz5Y45eiGxpHGSc" },
+        { title: "Enemy", type: "track", id: "1r9xUipOqoNwggBpENDsvJ" },
+      ],
+      disgust: [
+        { title: "Smells Like Teen Spirit", type: "track", id: "5ghIJDpPoe3CfHMGu71E6T" },
+        { title: "Seven Nation Army", type: "track", id: "3dPQuX8Gs42Y7b454ybpMR" },
+        { title: "Chop Suey!", type: "track", id: "2DlHlPMa4M17kufBvI2lEN" },
+        { title: "Killing In The Name", type: "track", id: "59WN2psjkt1tyaxjspN8fp" },
+        { title: "Toxicity", type: "track", id: "0snQkGI5qnAmohLE7jTsTn" },
+        { title: "Feel Good Hit of the Summer", type: "track", id: "1d6KS4GH06JAd19uiJn7R4" },
+      ],
+      fear: [
+        { title: "Experience", type: "track", id: "1BncfTJAWxrsxyT9culBrj" },
+        { title: "Cornfield Chase", type: "track", id: "6pWgRkpqVfxnj3WuIcJ7WP" },
+        { title: "Outro", type: "track", id: "0U3f5Bj6K1XhT7aYPiJGUj" },
+        { title: "Runaway", type: "track", id: "3DK6m7It6Pw857FcQftMds" },
+        { title: "Intro", type: "track", id: "5ihS6UUlyQAfmp48eSkxuQ" },
+        { title: "Holocene", type: "track", id: "35KiiILklye1JRRctaLUb4" },
+      ],
+      contempt: [
+        { title: "Redbone", type: "track", id: "0wXuerDYiBnERgIpbb3JBR" },
+        { title: "Get You", type: "track", id: "5NhlpQ6BOIz3S5yH9Kz6mC" },
+        { title: "Best Part", type: "track", id: "1RMJOxR6GRPsBHL8qeC2ux" },
+        { title: "Pink + White", type: "track", id: "3xKsf9qdS1CyvXSMEid6g8" },
+        { title: "C U Girl", type: "track", id: "2iyv2mXZ5nI8K4V3dPDP6m" },
+        { title: "Japanese Denim", type: "track", id: "0auXrO3N6a1RLXANfmrUGa" },
+      ],
+      uncertain: [
+        { title: "Sunset Lover", type: "track", id: "3FZLeaHnBWd4Pkcj3e6QWQ" },
+        { title: "Weightless", type: "track", id: "6kkwzB6hXLIONkEk9JciA6" },
+        { title: "A Moment Apart", type: "track", id: "6ZFbXIJkuI1dVNWvzJzown" },
+        { title: "Awake", type: "track", id: "5lN1EH25gdiqT1SFALMAq1" },
+        { title: "Bloom", type: "track", id: "3KkXRkHbMCARz0aVfEt68P" },
+        { title: "Ivy", type: "track", id: "2ZWlPOoWh0626oTaHrnl2a" },
+      ],
+    };
+
+    MUSIC_POOLS.unknown = MUSIC_POOLS.uncertain;
+    MUSIC_POOLS.no_face = MUSIC_POOLS.uncertain;
+
+    const openCameraBtn = document.getElementById("open-camera");
+    const stopCameraBtn = document.getElementById("stop-camera");
+    const cameraVideo = document.getElementById("camera-video");
+    const scannerIdle = document.getElementById("scanner-idle");
+    const scanEffect = document.getElementById("scan-effect");
+    const scanCaption = document.getElementById("scan-caption");
+    const timerCaption = document.getElementById("timer-caption");
+    const progressBar = document.getElementById("progress-bar");
+    const emotionValue = document.getElementById("emotion-value");
+    const emotionShare = document.getElementById("emotion-share");
+    const statusBox = document.getElementById("status-box");
+    const probList = document.getElementById("prob-list");
+    const musicGrid = document.getElementById("music-grid");
+    const musicSubtitle = document.getElementById("music-subtitle");
+    const faceOverlay = document.getElementById("face-overlay");
+    const captureCanvas = document.getElementById("capture-canvas");
+
+    let mediaStream = null;
+    let captureTimer = null;
+    let windowTimer = null;
+    let progressRaf = null;
+    let running = false;
+    let inFlight = false;
+    let lastProbabilities = null;
+    const votes = {};
+
+    function shuffle(items) {
+      const copy = [...items];
+      for (let i = copy.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+      }
+      return copy;
+    }
+
+    function renderMusic(emotion) {
+      const pool = MUSIC_POOLS[emotion] || MUSIC_POOLS.uncertain;
+      const selected = shuffle(pool).slice(0, MUSIC_CARD_COUNT);
+      musicGrid.innerHTML = "";
+      selected.forEach((item) => {
+        const embedPath = `https://open.spotify.com/embed/${item.type}/${item.id}?utm_source=generator&theme=0`;
+        const openPath = `https://open.spotify.com/${item.type}/${item.id}`;
+        const article = document.createElement("article");
+        article.className = "music-card";
+        article.innerHTML = `
+          <iframe
+            src="${embedPath}"
+            height="152"
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+            loading="lazy"
+          ></iframe>
+          <div class="music-card-footer">
+            <span class="music-name">${item.title}</span>
+            <a class="music-open" href="${openPath}" target="_blank" rel="noopener">開啟</a>
+          </div>
+        `;
+        musicGrid.appendChild(article);
+      });
+      musicSubtitle.textContent = `本輪依 ${EMOTION_LABELS_ZH[emotion] || "未知"} 情緒隨機抽出 ${selected.length} 首，不再固定同一組歌單。`;
+    }
+
+    function renderProbabilityList(probabilities) {
+      const order = Object.entries(probabilities || {
+        happiness: 0,
+        sadness: 0,
+        anger: 0,
+        disgust: 0,
+        fear: 0,
+        contempt: 0,
+      }).sort((a, b) => b[1] - a[1]);
+
+      probList.innerHTML = "";
+      order.forEach(([label, value]) => {
+        const percent = `${(value * 100).toFixed(1)}%`;
+        const row = document.createElement("div");
+        row.className = "prob-row";
+        row.innerHTML = `
+          <div class="prob-name">${label}</div>
+          <div class="prob-track"><div class="prob-fill" style="width:${percent}"></div></div>
+          <div class="prob-value">${percent}</div>
+        `;
+        probList.appendChild(row);
+      });
+    }
+
+    function resetVotes() {
+      Object.keys(votes).forEach((key) => delete votes[key]);
+    }
+
+    function calcDominantEmotion() {
+      let total = 0;
+      let dominant = "unknown";
+      let count = 0;
+
+      Object.entries(votes).forEach(([emotion, value]) => {
+        total += value;
+        if (value > count) {
+          count = value;
+          dominant = emotion;
+        }
+      });
+
+      return {
+        dominant,
+        share: total > 0 ? ((count / total) * 100).toFixed(1) : "0.0",
+      };
+    }
+
+    function updateResultCard(emotion, share) {
+      emotionValue.classList.remove("reveal");
+      void emotionValue.offsetWidth;
+      emotionValue.textContent = EMOTION_LABELS_ZH[emotion] || emotion;
+      emotionValue.classList.add("reveal");
+      emotionShare.textContent = `本輪最高佔比 ${share}%`;
+    }
+
+    function setStatus(message) {
+      statusBox.textContent = message;
+      scanCaption.textContent = message;
+    }
+
+    function clearFaceOverlay() {
+      const ctx = faceOverlay.getContext("2d");
+      const width = faceOverlay.clientWidth || 1;
+      const height = faceOverlay.clientHeight || 1;
+      faceOverlay.width = width;
+      faceOverlay.height = height;
+      ctx.clearRect(0, 0, width, height);
+    }
+
+    function drawFaceBox(faceBox) {
+      const ctx = faceOverlay.getContext("2d");
+      const width = faceOverlay.clientWidth || 1;
+      const height = faceOverlay.clientHeight || 1;
+      faceOverlay.width = width;
+      faceOverlay.height = height;
+      ctx.clearRect(0, 0, width, height);
+
+      if (!faceBox) {
+        return;
+      }
+
+      const x = (1 - faceBox.x - faceBox.w) * width;
+      const y = faceBox.y * height;
+      const boxW = faceBox.w * width;
+      const boxH = faceBox.h * height;
+      const segment = Math.min(boxW, boxH) * 0.24;
+
+      ctx.strokeStyle = "#32d97c";
+      ctx.lineWidth = 2.2;
+      ctx.shadowColor = "rgba(50, 217, 124, 0.75)";
+      ctx.shadowBlur = 16;
+      ctx.beginPath();
+
+      ctx.moveTo(x, y + segment);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + segment, y);
+
+      ctx.moveTo(x + boxW - segment, y);
+      ctx.lineTo(x + boxW, y);
+      ctx.lineTo(x + boxW, y + segment);
+
+      ctx.moveTo(x + boxW, y + boxH - segment);
+      ctx.lineTo(x + boxW, y + boxH);
+      ctx.lineTo(x + boxW - segment, y + boxH);
+
+      ctx.moveTo(x + segment, y + boxH);
+      ctx.lineTo(x, y + boxH);
+      ctx.lineTo(x, y + boxH - segment);
+
+      ctx.stroke();
+    }
+
+    async function detectFrame() {
+      if (!running || inFlight) {
+        return;
+      }
+
+      inFlight = true;
+      try {
+        const ctx = captureCanvas.getContext("2d");
+        const videoWidth = cameraVideo.videoWidth || 640;
+        const videoHeight = cameraVideo.videoHeight || 480;
+        const scale = CAPTURE_W / videoWidth;
+        captureCanvas.width = CAPTURE_W;
+        captureCanvas.height = Math.round(videoHeight * scale);
+        ctx.drawImage(cameraVideo, 0, 0, captureCanvas.width, captureCanvas.height);
+        const frame = captureCanvas.toDataURL("image/jpeg", 0.58);
+
+        const response = await fetch(`${API_BASE}/detect`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ frame }),
+        });
+
+        if (!response.ok) {
+          throw new Error("偵測服務暫時無法使用");
+        }
+
+        const data = await response.json();
+        const emotion = data.dominant_emotion || "unknown";
+        lastProbabilities = data.all_probabilities || lastProbabilities;
+
+        if (!["unknown", "uncertain", "no_face"].includes(emotion)) {
+          votes[emotion] = (votes[emotion] || 0) + 1;
+        }
+
+        drawFaceBox(data.face_box || null);
+
+        if (emotion === "no_face") {
+          setStatus("掃描中：尚未穩定捕捉到臉部，請看向鏡頭。");
+        } else {
+          setStatus(`掃描中：即時判斷為 ${EMOTION_LABELS_ZH[emotion] || emotion}`);
+        }
+      } catch (error) {
+        setStatus(error.message || "掃描時發生錯誤");
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    function stopActiveTimers() {
+      if (captureTimer) {
+        clearInterval(captureTimer);
+        captureTimer = null;
+      }
+      if (windowTimer) {
+        clearTimeout(windowTimer);
+        windowTimer = null;
+      }
+      if (progressRaf) {
+        cancelAnimationFrame(progressRaf);
+        progressRaf = null;
+      }
+    }
+
+    function stopCameraSession(message) {
+      running = false;
+      inFlight = false;
+      stopActiveTimers();
+      scanEffect.classList.remove("active");
+      stopCameraBtn.style.display = "none";
+      openCameraBtn.style.display = "inline-flex";
+      progressBar.style.width = "0%";
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
+      }
+      cameraVideo.pause();
+      cameraVideo.srcObject = null;
+      cameraVideo.style.display = "none";
+      scannerIdle.style.display = "flex";
+      clearFaceOverlay();
+      if (message) {
+        setStatus(message);
+      }
+    }
+
+    function startProgress(durationMs) {
+      const startedAt = performance.now();
+
+      function tick(now) {
+        if (!running) {
+          return;
+        }
+        const elapsed = now - startedAt;
+        const percent = Math.min((elapsed / durationMs) * 100, 100);
+        progressBar.style.width = `${percent}%`;
+        timerCaption.textContent = `剩餘 ${Math.max(0, Math.ceil((durationMs - elapsed) / 1000))} 秒`;
+        if (percent < 100) {
+          progressRaf = requestAnimationFrame(tick);
+        }
+      }
+
+      progressRaf = requestAnimationFrame(tick);
+    }
+
+    function finalizeScan() {
+      const { dominant, share } = calcDominantEmotion();
+      const resolvedEmotion = Object.keys(votes).length > 0 ? dominant : "no_face";
+      updateResultCard(resolvedEmotion, share);
+      renderProbabilityList(lastProbabilities);
+      renderMusic(resolvedEmotion);
+      stopCameraSession("掃描完成。本輪分析已結束，鏡頭已自動關閉。");
+      timerCaption.textContent = "掃描視窗 5 秒";
+      resetVotes();
+      // 通知桌寵：掃描完成，帶入本次情緒，解除勿擾
+      if (typeof window.__petHookFinalize === "function") {
+        window.__petHookFinalize(resolvedEmotion);
+      }
+    }
+
+    async function startAutoScan() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "user",
+            width: { ideal: 960 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+
+        cameraVideo.srcObject = mediaStream;
+        await cameraVideo.play();
+
+        running = true;
+        lastProbabilities = null;
+        resetVotes();
+        scannerIdle.style.display = "none";
+        cameraVideo.style.display = "block";
+        scanEffect.classList.add("active");
+        openCameraBtn.style.display = "none";
+        stopCameraBtn.style.display = "inline-flex";
+        setStatus("鏡頭已開啟，立即進入 5 秒自動掃描。");
+        // 桌寵掃描中勿擾
+        if (typeof petSetDnd === "function") petSetDnd(true);
+        if (typeof petClose_ === "function") petClose_();
+
+        startProgress(WINDOW_MS);
+        detectFrame();
+        captureTimer = setInterval(detectFrame, CAPTURE_MS);
+        windowTimer = setTimeout(finalizeScan, WINDOW_MS);
+      } catch (error) {
+        stopCameraSession();
+        setStatus(`無法開啟鏡頭：${error.message}`);
+      }
+    }
+
+    openCameraBtn.addEventListener("click", async () => {
+      if (running) {
+        return;
+      }
+      await startAutoScan();
+    });
+
+    stopCameraBtn.addEventListener("click", () => {
+      stopCameraSession("本輪掃描已中止。");
+      timerCaption.textContent = "掃描視窗 5 秒";
+    });
+
+    renderProbabilityList();
+    renderMusic("uncertain");
+
+    // ──────────────────────────────────────────
+    // AI 桌寵 — 對話邏輯
+    // ──────────────────────────────────────────
+    const petTrigger  = document.getElementById("pet-trigger");
+    const petPanel    = document.getElementById("pet-panel");
+    const petClose    = document.getElementById("pet-close");
+    const petMessages = document.getElementById("pet-messages");
+    const petInput    = document.getElementById("pet-input");
+    const petSendBtn  = document.getElementById("pet-send");
+
+    // 當次情緒上下文，掃描完成後由主流程更新
+    let petCurrentEmotion = "unknown";
+    // 對話歷史：[{ role, content }, ...]，最多保留 10 輪
+    const petHistory = [];
+    let petWaiting = false;
+
+    function petSetDnd(on) {
+      petTrigger.classList.toggle("dnd", on);
+    }
+
+    function petOpen() {
+      petPanel.classList.add("open");
+      petInput.focus();
+      if (petMessages.children.length === 0) {
+        petAppend("pet", "嗨，我在這裡 🌿 有什麼想說的嗎？");
+      }
+    }
+
+    function petClose_() {
+      petPanel.classList.remove("open");
+    }
+
+    petTrigger.addEventListener("click", petOpen);
+    petClose.addEventListener("click", petClose_);
+
+    // Esc 關閉
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && petPanel.classList.contains("open")) petClose_();
+    });
+
+    function petAppend(who, text) {
+      const div = document.createElement("div");
+      div.className = `pet-bubble ${who}`;
+      div.textContent = text;
+      petMessages.appendChild(div);
+      petMessages.scrollTop = petMessages.scrollHeight;
+      return div;
+    }
+
+    async function petSend(userText) {
+      userText = userText.trim();
+      if (!userText || petWaiting) return;
+      if (userText.length > 500) {
+        petAppend("pet", "說短一點吧，我一次只能讀 500 個字 😅");
+        return;
+      }
+
+      petAppend("user", userText);
+      petHistory.push({ role: "user", content: userText });
+      if (petHistory.length > 20) petHistory.splice(0, petHistory.length - 20);
+
+      petWaiting = true;
+      petSendBtn.disabled = true;
+      const loadingBubble = petAppend("loading", "陰晴正在思考…");
+
+      let reply = "我聽到了，你不需要一個人扛著。";
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 5000);
+        const res = await fetch(`${API_BASE}/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            emotion: petCurrentEmotion,
+            messages: petHistory,
+          }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(tid);
+        if (res.ok) {
+          const data = await res.json();
+          reply = data.reply || data.fallback || reply;
+        } else {
+          const data = await res.json().catch(() => ({}));
+          reply = data.fallback || reply;
+        }
+      } catch (_) {
+        // 超時或網路錯誤 → 固定回退文案
+      }
+
+      loadingBubble.remove();
+      petAppend("pet", reply);
+      petHistory.push({ role: "assistant", content: reply });
+      if (petHistory.length > 20) petHistory.splice(0, petHistory.length - 20);
+
+      petWaiting = false;
+      petSendBtn.disabled = false;
+      petInput.focus();
+    }
+
+    petSendBtn.addEventListener("click", () => {
+      petSend(petInput.value);
+      petInput.value = "";
+      petInput.style.height = "auto";
+    });
+
+    petInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        petSend(petInput.value);
+        petInput.value = "";
+        petInput.style.height = "auto";
+      }
+    });
+
+    // 自動撐高 textarea
+    petInput.addEventListener("input", () => {
+      petInput.style.height = "auto";
+      petInput.style.height = Math.min(petInput.scrollHeight, 120) + "px";
+    });
+
+    // 掃描進行中啟用勿擾，掃描後帶入情緒並關閉勿擾
+    const _origStartAutoScan = startAutoScan;
+    // 利用 finalizeScan 完成後更新情緒上下文
+    const _origFinalizeScan = finalizeScan;
+    // 覆寫 finalizeScan 以注入桌寵情緒更新
+    window.__petHookFinalize = function(emotion) {
+      petCurrentEmotion = emotion;
+      petSetDnd(false);
+    };
+  </script>
+</body>
+</html>
