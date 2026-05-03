@@ -720,6 +720,7 @@
         <div class="controls">
           <button id="open-camera" class="btn btn-primary">開啟鏡頭並自動掃描</button>
           <button id="stop-camera" class="btn btn-secondary" style="display:none">中止本輪掃描</button>
+          <button id="feedback-btn" class="btn btn-primary" style="display:none">分析回饋 →</button>
         </div>
       </section>
     </section>
@@ -983,9 +984,11 @@
 
     function redirectToFeedback(summary) {
       persistLatestScan(summary);
-      setTimeout(() => {
-        window.location.href = "./feedback.html";
-      }, 1400);
+      const feedbackBtn = document.getElementById("feedback-btn");
+      if (feedbackBtn) {
+        feedbackBtn.style.display = "";
+        feedbackBtn.onclick = () => { window.location.href = "./feedback.html"; };
+      }
     }
 
     function clearFaceOverlay() {
@@ -1155,7 +1158,7 @@
         share,
         timestamp: new Date().toISOString(),
       };
-      stopCameraSession("掃描完成。本輪分析已結束，1.4 秒後將前往回饋頁。");
+      stopCameraSession("掃描完成。點擊「分析回饋」按鈕前往回饋頁。");
       timerCaption.textContent = "掃描視窗 5 秒";
       resetVotes();
       // 通知桌寵：掃描完成，帶入本次情緒，解除勿擾
