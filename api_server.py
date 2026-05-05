@@ -5,6 +5,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -28,6 +29,56 @@ from emotion_camera import (
 
 app = Flask(__name__)
 CORS(app)
+
+# ──────────────────────────────────────────────
+# Spotify 設定
+# ──────────────────────────────────────────────
+_SPOTIFY_TOKEN_CACHE: dict = {}
+
+def _get_spotify_token() -> str | None:
+    """取得 Spotify access token（含快取，過期前 30 秒自動更新）。"""
+    now = time.time()
+    if _SPOTIFY_TOKEN_CACHE.get("expires_at", 0) > now + 30:
+        return _SPOTIFY_TOKEN_CACHE.get("access_token")
+
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID", "")
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return None
+
+    credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    data = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode()
+    req = urllib.request.Request(
+        "https://accounts.spotify.com/api/token",
+        data=data,
+        headers={
+            "Authorization": f"Basic {credentials}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read())
+        _SPOTIFY_TOKEN_CACHE["access_token"] = body["access_token"]
+        _SPOTIFY_TOKEN_CACHE["expires_at"] = now + int(body.get("expires_in", 3600))
+        return _SPOTIFY_TOKEN_CACHE["access_token"]
+    except Exception:
+        return None
+
+# 情緒 → Spotify 搜尋關鍵字
+_EMOTION_QUERIES: dict[str, str] = {
+    "happiness": "happy upbeat pop",
+    "sadness":   "sad emotional ballad",
+    "anger":     "intense rock energetic",
+    "disgust":   "grunge alternative rock",
+    "fear":      "ambient atmospheric calm",
+    "contempt":  "indie chill r&b",
+    "neutral":   "lo-fi chill",
+    "uncertain": "lo-fi chill",
+    "no_face":   "lo-fi chill",
+    "unknown":   "lo-fi chill",
+}
 
 # ──────────────────────────────────────────────
 # Groq 桌寵設定
@@ -375,6 +426,57 @@ def feedback():
 
     _append_pending_feedback(record)
     return jsonify({"ok": True, "stored": "local", "flushed_pending": flushed_pending}), 202
+
+
+
+
+# ──────────────────────────────────────────────
+# /music  —  Spotify 情緒歌曲推薦
+# ──────────────────────────────────────────────
+@app.get("/music")
+def music():
+    """
+    根據情緒回傳 Spotify 搜尋結果。
+    Query param: emotion（白名單驗證）
+    回傳: { "tracks": [{ "title", "artist", "type", "id" }, ...] }
+    """
+    emotion = str(request.args.get("emotion", "uncertain")).strip().lower()
+    if emotion not in _ALLOWED_EMOTIONS:
+        emotion = "uncertain"
+
+    token = _get_spotify_token()
+    if token is None:
+        return jsonify({"error": "spotify_unavailable", "tracks": []}), 503
+
+    query = _EMOTION_QUERIES.get(emotion, "lo-fi chill")
+    params = urllib.parse.urlencode({
+        "q": query,
+        "type": "track",
+        "market": "TW",
+        "limit": 12,
+    })
+    req = urllib.request.Request(
+        f"https://api.spotify.com/v1/search?{params}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return jsonify({"error": "spotify_error", "tracks": []}), 502
+
+    items = data.get("tracks", {}).get("items", [])
+    tracks = [
+        {
+            "title": item["name"],
+            "artist": ", ".join(a["name"] for a in item.get("artists", [])),
+            "type": "track",
+            "id": item["id"],
+        }
+        for item in items
+        if item.get("id")
+    ]
+    return jsonify({"tracks": tracks, "emotion": emotion})
 
 
 if __name__ == "__main__":
