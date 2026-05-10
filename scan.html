@@ -118,6 +118,35 @@
       margin-bottom: 12px;
     }
 
+    .diary-tools {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .diary-filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .diary-date-input {
+      min-height: 34px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+
+    .diary-filter-hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 2px;
+    }
+
     .diary-title {
       margin: 0;
       font-size: 20px;
@@ -136,6 +165,13 @@
       border: 1px solid rgba(255, 255, 255, 0.08);
       display: grid;
       gap: 6px;
+    }
+
+    .diary-row-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
     }
 
     .diary-meta {
@@ -159,6 +195,21 @@
       color: var(--muted);
       font-size: 13px;
       padding: 8px 2px;
+    }
+
+    .diary-delete {
+      border-radius: 999px;
+      padding: 5px 10px;
+      border: 1px solid rgba(255, 122, 122, 0.45);
+      background: rgba(255, 92, 92, 0.12);
+      color: #ffd1d1;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .diary-delete:disabled {
+      opacity: 0.6;
+      cursor: wait;
     }
 
     .hero {
@@ -592,6 +643,14 @@
       .result-grid {
         grid-template-columns: 1fr;
       }
+
+      .diary-filter-row {
+        align-items: stretch;
+      }
+
+      .diary-date-input {
+        flex: 1 1 130px;
+      }
     }
 
     /* ── 桌寵 ── */
@@ -853,6 +912,15 @@
         <h2 class="diary-title">我的情緒歷史</h2>
         <button id="diary-refresh" class="btn-auth" type="button">重新整理</button>
       </div>
+      <div class="diary-tools">
+        <div class="diary-filter-row">
+          <input id="diary-date-start" class="diary-date-input" type="date" aria-label="開始日期">
+          <input id="diary-date-end" class="diary-date-input" type="date" aria-label="結束日期">
+          <button id="diary-date-apply" class="btn-auth" type="button">套用日期</button>
+          <button id="diary-date-clear" class="btn-auth" type="button">清除</button>
+        </div>
+        <div class="diary-filter-hint">可用日期區間篩選，並可刪除不需要的單筆紀錄。</div>
+      </div>
       <div id="diary-list" class="diary-list">
         <div class="diary-empty">登入後可查看最近情緒紀錄。</div>
       </div>
@@ -989,10 +1057,16 @@
     const authSyncBtn = document.getElementById("auth-sync");
     const authStateLabel = document.getElementById("auth-state");
     const diaryRefreshBtn = document.getElementById("diary-refresh");
+    const diaryDateStartInput = document.getElementById("diary-date-start");
+    const diaryDateEndInput = document.getElementById("diary-date-end");
+    const diaryDateApplyBtn = document.getElementById("diary-date-apply");
+    const diaryDateClearBtn = document.getElementById("diary-date-clear");
     const diaryList = document.getElementById("diary-list");
 
     let supabaseClient = null;
     let currentSession = null;
+    let cloudDiaryEntries = [];
+    const diaryDeletingIds = new Set();
 
     let mediaStream = null;
     let captureTimer = null;
@@ -1172,14 +1246,57 @@
       return d.toLocaleString("zh-TW", { hour12: false });
     }
 
+    function getEntryDateText(entry) {
+      const source = entry.detected_at || entry.created_at || "";
+      if (!source) {
+        return "";
+      }
+      const d = new Date(source);
+      if (Number.isNaN(d.getTime())) {
+        return String(source).slice(0, 10);
+      }
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    function getFilteredDiaryEntries() {
+      const start = (diaryDateStartInput.value || "").trim();
+      const end = (diaryDateEndInput.value || "").trim();
+      if (!start && !end) {
+        return cloudDiaryEntries;
+      }
+
+      return cloudDiaryEntries.filter((entry) => {
+        const day = getEntryDateText(entry);
+        if (!day) {
+          return false;
+        }
+        if (start && day < start) {
+          return false;
+        }
+        if (end && day > end) {
+          return false;
+        }
+        return true;
+      });
+    }
+
     function renderDiaryEntries(entries) {
+      cloudDiaryEntries = Array.isArray(entries) ? entries : [];
+      const visibleEntries = getFilteredDiaryEntries();
+
       diaryList.innerHTML = "";
-      if (!entries.length) {
-        diaryList.innerHTML = '<div class="diary-empty">目前還沒有雲端紀錄，先完成一次掃描看看。</div>';
+      if (!visibleEntries.length) {
+        const hasFilter = Boolean((diaryDateStartInput.value || "").trim() || (diaryDateEndInput.value || "").trim());
+        diaryList.innerHTML = hasFilter
+          ? '<div class="diary-empty">這個日期區間沒有紀錄，請調整篩選條件。</div>'
+          : '<div class="diary-empty">目前還沒有雲端紀錄，先完成一次掃描看看。</div>';
         return;
       }
 
-      entries.forEach((entry) => {
+      visibleEntries.forEach((entry) => {
         const row = document.createElement("article");
         row.className = "diary-row";
 
@@ -1187,14 +1304,62 @@
         const songText = songs.length
           ? songs.map((song) => song.title).filter(Boolean).slice(0, 3).join("、")
           : "(無歌曲資料)";
+        const entryId = String(entry.id || "");
+        const deleting = entryId ? diaryDeletingIds.has(entryId) : false;
+        const deleteButton = entryId
+          ? `<button class="diary-delete" data-entry-id="${entryId}" type="button" ${deleting ? "disabled" : ""}>${deleting ? "刪除中..." : "刪除"}</button>`
+          : "";
 
         row.innerHTML = `
-          <div class="diary-meta">${formatDateTime(entry.detected_at || entry.created_at || "")}</div>
+          <div class="diary-row-top">
+            <div class="diary-meta">${formatDateTime(entry.detected_at || entry.created_at || "")}</div>
+            ${deleteButton}
+          </div>
           <div class="diary-emotion">${EMOTION_LABELS_ZH[entry.emotion] || entry.emotion} ・ 佔比 ${entry.share ?? "0.0"}%</div>
           <div class="diary-songs">推薦：${songText}</div>
         `;
         diaryList.appendChild(row);
       });
+    }
+
+    async function deleteCloudDiaryEntry(entryId) {
+      if (!entryId || !currentSession?.access_token) {
+        alert("請先登入後再刪除紀錄。");
+        return;
+      }
+
+      if (!window.confirm("確定要刪除這筆情緒紀錄嗎？刪除後無法復原。")) {
+        return;
+      }
+
+      const normalizedId = String(entryId);
+      if (diaryDeletingIds.has(normalizedId)) {
+        return;
+      }
+      diaryDeletingIds.add(normalizedId);
+      renderDiaryEntries(cloudDiaryEntries);
+
+      try {
+        const res = await fetch(`${API_BASE}/diary/entry/${encodeURIComponent(normalizedId)}`, {
+          method: "DELETE",
+          headers: {
+            "Authorization": `Bearer ${currentSession.access_token}`,
+          },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = data.error || `HTTP ${res.status}`;
+          throw new Error(`刪除失敗：${msg}`);
+        }
+
+        cloudDiaryEntries = cloudDiaryEntries.filter((entry) => String(entry.id || "") !== normalizedId);
+        renderDiaryEntries(cloudDiaryEntries);
+      } catch (err) {
+        alert(err.message || "刪除失敗，請稍後再試。");
+      } finally {
+        diaryDeletingIds.delete(normalizedId);
+        renderDiaryEntries(cloudDiaryEntries);
+      }
     }
 
     async function fetchCloudDiaryEntries(manual = false) {
@@ -1670,6 +1835,29 @@
 
     diaryRefreshBtn.addEventListener("click", () => {
       fetchCloudDiaryEntries(true);
+    });
+
+    diaryDateApplyBtn.addEventListener("click", () => {
+      renderDiaryEntries(cloudDiaryEntries);
+    });
+
+    diaryDateClearBtn.addEventListener("click", () => {
+      diaryDateStartInput.value = "";
+      diaryDateEndInput.value = "";
+      renderDiaryEntries(cloudDiaryEntries);
+    });
+
+    diaryList.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const btn = target.closest(".diary-delete");
+      if (!btn) {
+        return;
+      }
+      const entryId = btn.getAttribute("data-entry-id") || "";
+      deleteCloudDiaryEntry(entryId);
     });
 
     initSupabaseAuth();
