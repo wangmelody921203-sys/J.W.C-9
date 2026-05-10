@@ -70,6 +70,38 @@
       margin: 28px auto 48px;
     }
 
+    .auth-strip {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+      border-radius: 18px;
+    }
+
+    .auth-state {
+      margin-left: auto;
+      font-size: 13px;
+      color: var(--muted);
+      word-break: break-word;
+    }
+
+    .btn-auth {
+      border-radius: 999px;
+      padding: 8px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .btn-auth:hover {
+      border-color: rgba(50, 217, 124, 0.5);
+      color: #ccfbe3;
+    }
+
     .hero {
       display: grid;
       grid-template-columns: 1.15fr 0.85fr;
@@ -682,6 +714,14 @@
   <div class="safety-banner">本產品不儲存影像資料；辨識過程僅用於即時分析並於完成後丟棄。</div>
 
   <main class="page">
+    <section class="glass-card auth-strip">
+      <button id="auth-signup" class="btn-auth" type="button">註冊</button>
+      <button id="auth-login" class="btn-auth" type="button">登入</button>
+      <button id="auth-logout" class="btn-auth" type="button" style="display:none">登出</button>
+      <button id="auth-sync" class="btn-auth" type="button">同步雲端日誌</button>
+      <span id="auth-state" class="auth-state">帳戶：未登入</span>
+    </section>
+
     <section class="hero">
       <div class="glass-card intro">
         <div class="eyebrow">Emotion Analysis Engine</div>
@@ -771,8 +811,11 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
     const API_BASE = "https://j-w-c-9.onrender.com";
+    const SUPABASE_URL = "https://yqcyyenuksulrbyvzpkv.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "REPLACE_WITH_SUPABASE_PUBLISHABLE_KEY";
     const SCAN_STORAGE_KEY = "emotionSense.latestScan";
     const MOOD_DIARY_KEY = "emotionSense.moodDiary.v1";
     const MOOD_DIARY_LIMIT = 120;
@@ -871,6 +914,14 @@
     const musicSubtitle = document.getElementById("music-subtitle");
     const faceOverlay = document.getElementById("face-overlay");
     const captureCanvas = document.getElementById("capture-canvas");
+    const authSignupBtn = document.getElementById("auth-signup");
+    const authLoginBtn = document.getElementById("auth-login");
+    const authLogoutBtn = document.getElementById("auth-logout");
+    const authSyncBtn = document.getElementById("auth-sync");
+    const authStateLabel = document.getElementById("auth-state");
+
+    let supabaseClient = null;
+    let currentSession = null;
 
     let mediaStream = null;
     let captureTimer = null;
@@ -1005,11 +1056,191 @@
 
     function addMoodDiaryEntry(entry) {
       const entries = loadMoodDiary();
-      entries.unshift(entry);
+      const normalized = {
+        client_entry_id: entry.client_entry_id || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        synced: Boolean(entry.synced),
+        timestamp: entry.timestamp || new Date().toISOString(),
+        emotion: entry.emotion || "unknown",
+        share: entry.share || "0.0",
+        songs: Array.isArray(entry.songs) ? entry.songs : [],
+      };
+      entries.unshift(normalized);
       if (entries.length > MOOD_DIARY_LIMIT) {
         entries.length = MOOD_DIARY_LIMIT;
       }
       persistMoodDiary(entries);
+    }
+
+    function ensureDiaryEntryIds() {
+      const entries = loadMoodDiary();
+      let changed = false;
+      entries.forEach((entry) => {
+        if (!entry.client_entry_id) {
+          entry.client_entry_id = `legacy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          changed = true;
+        }
+        if (typeof entry.synced !== "boolean") {
+          entry.synced = false;
+          changed = true;
+        }
+      });
+      if (changed) {
+        persistMoodDiary(entries);
+      }
+    }
+
+    function setAuthState(text) {
+      authStateLabel.textContent = text;
+    }
+
+    function updateAuthButtons() {
+      const loggedIn = Boolean(currentSession?.access_token);
+      authSignupBtn.style.display = loggedIn ? "none" : "";
+      authLoginBtn.style.display = loggedIn ? "none" : "";
+      authLogoutBtn.style.display = loggedIn ? "" : "none";
+    }
+
+    function getUnsyncedDiaryEntries() {
+      return loadMoodDiary().filter((entry) => !entry.synced);
+    }
+
+    function markEntriesSynced(clientEntryIds) {
+      if (!clientEntryIds.length) {
+        return;
+      }
+      const idSet = new Set(clientEntryIds);
+      const entries = loadMoodDiary();
+      entries.forEach((entry) => {
+        if (idSet.has(entry.client_entry_id)) {
+          entry.synced = true;
+        }
+      });
+      persistMoodDiary(entries);
+    }
+
+    async function syncMoodDiaryToCloud(manual = false) {
+      if (!currentSession?.access_token) {
+        if (manual) {
+          alert("請先登入後再同步。");
+        }
+        return;
+      }
+
+      const unsynced = getUnsyncedDiaryEntries();
+      if (!unsynced.length) {
+        if (manual) {
+          alert("目前沒有需要同步的新資料。");
+        }
+        setAuthState("帳戶：已登入（雲端日誌已同步）");
+        return;
+      }
+
+      const payload = {
+        entries: unsynced.map((entry) => ({
+          client_entry_id: entry.client_entry_id,
+          timestamp: entry.timestamp,
+          emotion: entry.emotion,
+          share: entry.share,
+          songs: entry.songs || [],
+        })),
+      };
+
+      try {
+        const res = await fetch(`${API_BASE}/diary/sync`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${currentSession.access_token}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = data.error || "sync_failed";
+          throw new Error(`同步失敗：${msg}`);
+        }
+
+        markEntriesSynced(payload.entries.map((entry) => entry.client_entry_id));
+        setAuthState(`帳戶：已登入（本次同步 ${payload.entries.length} 筆）`);
+        if (manual) {
+          alert(`同步完成：${payload.entries.length} 筆`);
+        }
+      } catch (err) {
+        if (manual) {
+          alert(err.message || "同步失敗，請稍後再試。");
+        }
+        setAuthState("帳戶：已登入（同步失敗，稍後重試）");
+      }
+    }
+
+    async function handleAuthAction(type) {
+      if (!supabaseClient) {
+        alert("尚未設定 Supabase Publishable Key。請先更新 scan.html 的 SUPABASE_PUBLISHABLE_KEY。");
+        return;
+      }
+
+      const email = window.prompt("請輸入 Email");
+      if (!email) {
+        return;
+      }
+      const password = window.prompt("請輸入密碼（至少 6 碼）");
+      if (!password) {
+        return;
+      }
+
+      if (type === "signup") {
+        const { error } = await supabaseClient.auth.signUp({ email, password });
+        if (error) {
+          alert(`註冊失敗：${error.message}`);
+          return;
+        }
+        alert("註冊成功，請改用登入按鈕登入。");
+      } else {
+        const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        if (error) {
+          alert(`登入失敗：${error.message}`);
+          return;
+        }
+      }
+    }
+
+    async function initSupabaseAuth() {
+      ensureDiaryEntryIds();
+
+      if (!window.supabase || !SUPABASE_PUBLISHABLE_KEY || SUPABASE_PUBLISHABLE_KEY.includes("REPLACE_WITH")) {
+        setAuthState("帳戶：未啟用（請填入 Publishable Key）");
+        updateAuthButtons();
+        return;
+      }
+
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: true,
+        },
+      });
+
+      const { data } = await supabaseClient.auth.getSession();
+      currentSession = data.session;
+      if (currentSession?.user?.email) {
+        setAuthState(`帳戶：${currentSession.user.email}`);
+      } else {
+        setAuthState("帳戶：未登入");
+      }
+      updateAuthButtons();
+
+      supabaseClient.auth.onAuthStateChange((_event, session) => {
+        currentSession = session;
+        if (currentSession?.user?.email) {
+          setAuthState(`帳戶：${currentSession.user.email}`);
+          syncMoodDiaryToCloud(false);
+        } else {
+          setAuthState("帳戶：未登入");
+        }
+        updateAuthButtons();
+      });
     }
 
     // 先提供給後續頁面或帳戶同步流程調用。
@@ -1202,6 +1433,7 @@
           id: song.id,
         })),
       });
+      syncMoodDiaryToCloud(false);
       stopCameraSession("掃描完成。點擊「分析回饋」按鈕前往回饋頁。");
       timerCaption.textContent = "掃描視窗 5 秒";
       resetVotes();
@@ -1263,6 +1495,30 @@
 
     renderProbabilityList();
     renderMusic("uncertain");
+
+    authSignupBtn.addEventListener("click", () => {
+      handleAuthAction("signup");
+    });
+
+    authLoginBtn.addEventListener("click", () => {
+      handleAuthAction("login");
+    });
+
+    authLogoutBtn.addEventListener("click", async () => {
+      if (!supabaseClient) {
+        return;
+      }
+      await supabaseClient.auth.signOut();
+      currentSession = null;
+      setAuthState("帳戶：未登入");
+      updateAuthButtons();
+    });
+
+    authSyncBtn.addEventListener("click", () => {
+      syncMoodDiaryToCloud(true);
+    });
+
+    initSupabaseAuth();
 
     // ──────────────────────────────────────────
     // AI 桌寵 — 對話邏輯
