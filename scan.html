@@ -131,6 +131,19 @@
       align-items: center;
     }
 
+    .diary-quick-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .diary-quick-btn.active {
+      border-color: rgba(50, 217, 124, 0.65);
+      color: #ccfbe3;
+      background: rgba(50, 217, 124, 0.12);
+    }
+
     .diary-date-input {
       min-height: 34px;
       border-radius: 10px;
@@ -651,6 +664,10 @@
       .diary-date-input {
         flex: 1 1 130px;
       }
+
+      .diary-quick-btn {
+        flex: 1 1 90px;
+      }
     }
 
     /* ── 桌寵 ── */
@@ -913,13 +930,19 @@
         <button id="diary-refresh" class="btn-auth" type="button">重新整理</button>
       </div>
       <div class="diary-tools">
+        <div class="diary-quick-row">
+          <button id="diary-range-today" class="btn-auth diary-quick-btn" type="button">今天</button>
+          <button id="diary-range-7d" class="btn-auth diary-quick-btn" type="button">近7天</button>
+          <button id="diary-range-30d" class="btn-auth diary-quick-btn" type="button">近30天</button>
+          <button id="diary-range-all" class="btn-auth diary-quick-btn active" type="button">全部</button>
+        </div>
         <div class="diary-filter-row">
           <input id="diary-date-start" class="diary-date-input" type="date" aria-label="開始日期">
           <input id="diary-date-end" class="diary-date-input" type="date" aria-label="結束日期">
           <button id="diary-date-apply" class="btn-auth" type="button">套用日期</button>
           <button id="diary-date-clear" class="btn-auth" type="button">清除</button>
         </div>
-        <div class="diary-filter-hint">可用日期區間篩選，並可刪除不需要的單筆紀錄。</div>
+        <div class="diary-filter-hint">可用快捷鍵一鍵篩選，也可手動選日期，並支援刪除單筆紀錄。</div>
       </div>
       <div id="diary-list" class="diary-list">
         <div class="diary-empty">登入後可查看最近情緒紀錄。</div>
@@ -1061,12 +1084,17 @@
     const diaryDateEndInput = document.getElementById("diary-date-end");
     const diaryDateApplyBtn = document.getElementById("diary-date-apply");
     const diaryDateClearBtn = document.getElementById("diary-date-clear");
+    const diaryRangeTodayBtn = document.getElementById("diary-range-today");
+    const diaryRange7dBtn = document.getElementById("diary-range-7d");
+    const diaryRange30dBtn = document.getElementById("diary-range-30d");
+    const diaryRangeAllBtn = document.getElementById("diary-range-all");
     const diaryList = document.getElementById("diary-list");
 
     let supabaseClient = null;
     let currentSession = null;
     let cloudDiaryEntries = [];
     const diaryDeletingIds = new Set();
+    let diaryActiveQuickRange = "all";
 
     let mediaStream = null;
     let captureTimer = null;
@@ -1244,6 +1272,58 @@
         return isoString;
       }
       return d.toLocaleString("zh-TW", { hour12: false });
+    }
+
+    function toDateInputValue(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    function updateQuickRangeButtons() {
+      const buttons = [
+        [diaryRangeTodayBtn, "today"],
+        [diaryRange7dBtn, "7d"],
+        [diaryRange30dBtn, "30d"],
+        [diaryRangeAllBtn, "all"],
+      ];
+      buttons.forEach(([btn, key]) => {
+        if (!btn) {
+          return;
+        }
+        btn.classList.toggle("active", diaryActiveQuickRange === key);
+      });
+    }
+
+    function applyQuickRange(rangeKey) {
+      const now = new Date();
+      const end = toDateInputValue(now);
+      diaryActiveQuickRange = rangeKey;
+
+      if (rangeKey === "all") {
+        diaryDateStartInput.value = "";
+        diaryDateEndInput.value = "";
+        updateQuickRangeButtons();
+        renderDiaryEntries(cloudDiaryEntries);
+        return;
+      }
+
+      let backDays = 0;
+      if (rangeKey === "today") {
+        backDays = 0;
+      } else if (rangeKey === "7d") {
+        backDays = 6;
+      } else if (rangeKey === "30d") {
+        backDays = 29;
+      }
+
+      const startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - backDays);
+      diaryDateStartInput.value = toDateInputValue(startDate);
+      diaryDateEndInput.value = end;
+      updateQuickRangeButtons();
+      renderDiaryEntries(cloudDiaryEntries);
     }
 
     function getEntryDateText(entry) {
@@ -1838,13 +1918,41 @@
     });
 
     diaryDateApplyBtn.addEventListener("click", () => {
+      diaryActiveQuickRange = "custom";
+      updateQuickRangeButtons();
       renderDiaryEntries(cloudDiaryEntries);
     });
 
     diaryDateClearBtn.addEventListener("click", () => {
-      diaryDateStartInput.value = "";
-      diaryDateEndInput.value = "";
+      applyQuickRange("all");
+    });
+
+    diaryDateStartInput.addEventListener("change", () => {
+      diaryActiveQuickRange = "custom";
+      updateQuickRangeButtons();
       renderDiaryEntries(cloudDiaryEntries);
+    });
+
+    diaryDateEndInput.addEventListener("change", () => {
+      diaryActiveQuickRange = "custom";
+      updateQuickRangeButtons();
+      renderDiaryEntries(cloudDiaryEntries);
+    });
+
+    diaryRangeTodayBtn.addEventListener("click", () => {
+      applyQuickRange("today");
+    });
+
+    diaryRange7dBtn.addEventListener("click", () => {
+      applyQuickRange("7d");
+    });
+
+    diaryRange30dBtn.addEventListener("click", () => {
+      applyQuickRange("30d");
+    });
+
+    diaryRangeAllBtn.addEventListener("click", () => {
+      applyQuickRange("all");
     });
 
     diaryList.addEventListener("click", (event) => {
@@ -1859,6 +1967,8 @@
       const entryId = btn.getAttribute("data-entry-id") || "";
       deleteCloudDiaryEntry(entryId);
     });
+
+    updateQuickRangeButtons();
 
     initSupabaseAuth();
 
