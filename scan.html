@@ -1199,6 +1199,7 @@
 
     async function fetchCloudDiaryEntries(manual = false) {
       if (!currentSession?.access_token) {
+        console.warn("[diary] No access token found");
         renderDiaryEntries([]);
         if (manual) {
           alert("請先登入後再讀取雲端歷史。");
@@ -1206,6 +1207,7 @@
         return;
       }
 
+      console.log("[diary] Fetching cloud entries with token:", currentSession.access_token.substring(0, 20) + "...");
       try {
         const res = await fetch(`${API_BASE}/diary/list?limit=20&offset=0`, {
           method: "GET",
@@ -1213,13 +1215,24 @@
             "Authorization": `Bearer ${currentSession.access_token}`,
           },
         });
-        const data = await res.json().catch(() => ({}));
+        console.log("[diary] Response status:", res.status);
+        
+        const data = await res.json().catch((err) => {
+          console.error("[diary] JSON parse error:", err);
+          return {};
+        });
+        console.log("[diary] Response data:", data);
+        
         if (!res.ok) {
-          const msg = data.error || "list_failed";
+          const msg = data.error || data.message || `HTTP ${res.status}`;
           throw new Error(`讀取失敗：${msg}`);
         }
-        renderDiaryEntries(Array.isArray(data.entries) ? data.entries : []);
+        
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        console.log("[diary] Rendering", entries.length, "entries");
+        renderDiaryEntries(entries);
       } catch (err) {
+        console.error("[diary] Fetch error:", err);
         if (manual) {
           alert(err.message || "讀取失敗，請稍後再試。");
         }

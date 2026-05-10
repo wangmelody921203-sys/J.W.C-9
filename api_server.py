@@ -119,11 +119,17 @@ def _resolve_user_id_from_bearer(token: str, supabase_url: str, service_key: str
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:
             if resp.status != 200:
+                print(f"[DIARY] Token resolution failed: HTTP {resp.status}")
                 return None
             data = json.loads(resp.read())
             user_id = str(data.get("id", "")).strip()
+            if user_id:
+                print(f"[DIARY] Token resolved to user_id: {user_id[:12]}...")
+            else:
+                print(f"[DIARY] Token resolved but no user_id found")
             return user_id or None
-    except Exception:
+    except Exception as e:
+        print(f"[DIARY] Token resolution error: {e}")
         return None
 
 
@@ -360,16 +366,20 @@ def diary_sync():
 
 @app.get("/diary/list")
 def diary_list():
+    print("[DIARY LIST] Request started")
     supabase_url, service_key = _get_supabase_config()
     if not supabase_url or not service_key:
+        print("[DIARY LIST] Supabase not configured")
         return jsonify({"error": "supabase_not_configured"}), 503
 
     token = _extract_bearer_token()
     if not token:
+        print("[DIARY LIST] Missing bearer token")
         return jsonify({"error": "missing_bearer"}), 401
 
     user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
     if not user_id:
+        print("[DIARY LIST] Failed to resolve user_id from token")
         return jsonify({"error": "invalid_token"}), 401
 
     try:
@@ -380,6 +390,8 @@ def diary_list():
         offset = max(0, int(request.args.get("offset", 0)))
     except (TypeError, ValueError):
         offset = 0
+
+    print(f"[DIARY LIST] Querying for user_id={user_id[:12]}..., limit={limit}, offset={offset}")
 
     status, data = _supabase_rest_request(
         method="GET",
@@ -394,10 +406,16 @@ def diary_list():
             "offset": str(offset),
         },
     )
+    
+    print(f"[DIARY LIST] Supabase response status: {status}")
+    
     if status != 200:
+        print(f"[DIARY LIST] Supabase error: {data}")
         return jsonify({"error": "supabase_query_failed", "details": data}), 502
 
-    return jsonify({"ok": True, "entries": data if isinstance(data, list) else []})
+    result = data if isinstance(data, list) else []
+    print(f"[DIARY LIST] Returning {len(result)} entries")
+    return jsonify({"ok": True, "entries": result})
 
 
 @app.delete("/diary/entry/<entry_id>")
