@@ -5,6 +5,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -86,6 +87,131 @@ _SYSTEM_PROMPT = """\
 
 FEEDBACK_QUEUE_FILE = Path("emotion_output/pending_feedback.jsonl")
 FEEDBACK_WEBHOOK_ENV = "FEEDBACK_WEBHOOK_URL"
+SUPABASE_URL_ENV = "SUPABASE_URL"
+SUPABASE_SERVICE_KEY_ENV = "SUPABASE_SERVICE_ROLE_KEY"
+
+
+def _get_supabase_config() -> tuple[str, str] | tuple[None, None]:
+    base = os.environ.get(SUPABASE_URL_ENV, "").strip().rstrip("/")
+    service_key = os.environ.get(SUPABASE_SERVICE_KEY_ENV, "").strip()
+    if not base or not service_key:
+        return None, None
+    return base, service_key
+
+
+def _extract_bearer_token() -> str | None:
+    auth = request.headers.get("Authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None
+    token = auth[7:].strip()
+    return token or None
+
+
+def _resolve_user_id_from_bearer(token: str, supabase_url: str, service_key: str) -> str | None:
+    req = urllib.request.Request(
+        f"{supabase_url}/auth/v1/user",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "apikey": service_key,
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status != 200:
+                return None
+            data = json.loads(resp.read())
+            user_id = str(data.get("id", "")).strip()
+            return user_id or None
+    except Exception:
+        return None
+
+
+def _supabase_rest_request(
+    *,
+    method: str,
+    path: str,
+    supabase_url: str,
+    service_key: str,
+    query: dict | None = None,
+    payload: dict | list | None = None,
+    prefer: str | None = None,
+) -> tuple[int, dict | list | None]:
+    query_str = urllib.parse.urlencode(query or {}, doseq=True)
+    url = f"{supabase_url}{path}"
+    if query_str:
+        url = f"{url}?{query_str}"
+
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "application/json",
+    }
+    if prefer:
+        headers["Prefer"] = prefer
+
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+            data = json.loads(raw) if raw else None
+            return resp.status, data
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="ignore") if e.fp else ""
+        try:
+            parsed = json.loads(raw) if raw else None
+        except json.JSONDecodeError:
+            parsed = {"error": raw or str(e)}
+        return e.code, parsed
+    except Exception as e:
+        return 500, {"error": str(e)}
+
+
+def _sanitize_diary_entries(raw_entries: list, user_id: str) -> list[dict]:
+    cleaned: list[dict] = []
+    seen_ids: set[str] = set()
+    for row in raw_entries[:200]:
+        if not isinstance(row, dict):
+            continue
+        client_entry_id = str(row.get("client_entry_id", "")).strip()
+        detected_at = str(row.get("timestamp", "")).strip()
+        emotion = str(row.get("emotion", "unknown")).strip().lower()
+        if not client_entry_id or not detected_at:
+            continue
+        if client_entry_id in seen_ids:
+            continue
+        seen_ids.add(client_entry_id)
+        if emotion not in _ALLOWED_EMOTIONS:
+            emotion = "unknown"
+        try:
+            share = float(row.get("share", 0.0))
+        except (TypeError, ValueError):
+            share = 0.0
+        songs = row.get("songs", [])
+        safe_songs = []
+        if isinstance(songs, list):
+            for song in songs[:10]:
+                if not isinstance(song, dict):
+                    continue
+                safe_songs.append(
+                    {
+                        "title": str(song.get("title", "")).strip()[:120],
+                        "type": str(song.get("type", "track")).strip()[:20] or "track",
+                        "id": str(song.get("id", "")).strip()[:64],
+                    }
+                )
+        cleaned.append(
+            {
+                "user_id": user_id,
+                "client_entry_id": client_entry_id[:120],
+                "detected_at": detected_at,
+                "emotion": emotion,
+                "share": round(max(0.0, share), 1),
+                "songs": safe_songs,
+            }
+        )
+    return cleaned
 
 
 def _append_pending_feedback(payload: dict) -> None:
@@ -174,7 +300,15 @@ def index():
         {
             "service": "emotion-api",
             "status": "ok",
-            "endpoints": ["/health", "/detect", "/generate", "/feedback"],
+            "endpoints": [
+                "/health",
+                "/detect",
+                "/generate",
+                "/feedback",
+                "/diary/sync",
+                "/diary/list",
+                "/diary/entry/<id>",
+            ],
         }
     )
 
@@ -182,6 +316,124 @@ def index():
 @app.get("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.post("/diary/sync")
+def diary_sync():
+    supabase_url, service_key = _get_supabase_config()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+
+    token = _extract_bearer_token()
+    if not token:
+        return jsonify({"error": "missing_bearer"}), 401
+
+    user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
+    if not user_id:
+        return jsonify({"error": "invalid_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    entries = payload.get("entries", [])
+    if not isinstance(entries, list):
+        return jsonify({"error": "invalid_entries"}), 400
+
+    cleaned_entries = _sanitize_diary_entries(entries, user_id)
+    if not cleaned_entries:
+        return jsonify({"ok": True, "inserted_count": 0, "duplicate_count": 0})
+
+    status, data = _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/mood_entries",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={"on_conflict": "user_id,client_entry_id"},
+        payload=cleaned_entries,
+        prefer="resolution=ignore-duplicates,return=representation",
+    )
+    if status not in (200, 201):
+        return jsonify({"error": "supabase_insert_failed", "details": data}), 502
+
+    inserted = len(data) if isinstance(data, list) else 0
+    duplicate = max(0, len(cleaned_entries) - inserted)
+    return jsonify({"ok": True, "inserted_count": inserted, "duplicate_count": duplicate})
+
+
+@app.get("/diary/list")
+def diary_list():
+    supabase_url, service_key = _get_supabase_config()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+
+    token = _extract_bearer_token()
+    if not token:
+        return jsonify({"error": "missing_bearer"}), 401
+
+    user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
+    if not user_id:
+        return jsonify({"error": "invalid_token"}), 401
+
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/mood_entries",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,client_entry_id,detected_at,emotion,share,songs,created_at",
+            "user_id": f"eq.{user_id}",
+            "order": "detected_at.desc",
+            "limit": str(limit),
+            "offset": str(offset),
+        },
+    )
+    if status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+
+    return jsonify({"ok": True, "entries": data if isinstance(data, list) else []})
+
+
+@app.delete("/diary/entry/<entry_id>")
+def diary_delete(entry_id: str):
+    supabase_url, service_key = _get_supabase_config()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+
+    token = _extract_bearer_token()
+    if not token:
+        return jsonify({"error": "missing_bearer"}), 401
+
+    user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
+    if not user_id:
+        return jsonify({"error": "invalid_token"}), 401
+
+    target_id = str(entry_id).strip()
+    if not target_id:
+        return jsonify({"error": "invalid_entry_id"}), 400
+
+    status, data = _supabase_rest_request(
+        method="DELETE",
+        path="/rest/v1/mood_entries",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "id": f"eq.{target_id}",
+            "user_id": f"eq.{user_id}",
+        },
+        prefer="return=representation",
+    )
+    if status not in (200, 204):
+        return jsonify({"error": "supabase_delete_failed", "details": data}), 502
+
+    deleted_count = len(data) if isinstance(data, list) else 0
+    return jsonify({"ok": True, "deleted_count": deleted_count})
 
 
 @app.post("/detect")
