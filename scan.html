@@ -131,17 +131,14 @@
       align-items: center;
     }
 
-    .diary-quick-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .diary-quick-btn.active {
-      border-color: rgba(50, 217, 124, 0.65);
-      color: #ccfbe3;
-      background: rgba(50, 217, 124, 0.12);
+    .diary-range-select {
+      min-height: 34px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      padding: 6px 10px;
+      font-size: 12px;
     }
 
     .diary-date-input {
@@ -665,8 +662,8 @@
         flex: 1 1 130px;
       }
 
-      .diary-quick-btn {
-        flex: 1 1 90px;
+      .diary-range-select {
+        width: 100%;
       }
     }
 
@@ -930,19 +927,20 @@
         <button id="diary-refresh" class="btn-auth" type="button">重新整理</button>
       </div>
       <div class="diary-tools">
-        <div class="diary-quick-row">
-          <button id="diary-range-today" class="btn-auth diary-quick-btn" type="button">今天</button>
-          <button id="diary-range-7d" class="btn-auth diary-quick-btn" type="button">近7天</button>
-          <button id="diary-range-30d" class="btn-auth diary-quick-btn" type="button">近30天</button>
-          <button id="diary-range-all" class="btn-auth diary-quick-btn active" type="button">全部</button>
-        </div>
+        <select id="diary-range-select" class="diary-range-select" aria-label="快速日期區間">
+          <option value="all" selected>全部紀錄</option>
+          <option value="today">今天</option>
+          <option value="7d">近 7 天</option>
+          <option value="30d">近 30 天</option>
+          <option value="custom">自訂日期</option>
+        </select>
         <div class="diary-filter-row">
           <input id="diary-date-start" class="diary-date-input" type="date" aria-label="開始日期">
           <input id="diary-date-end" class="diary-date-input" type="date" aria-label="結束日期">
           <button id="diary-date-apply" class="btn-auth" type="button">套用日期</button>
           <button id="diary-date-clear" class="btn-auth" type="button">清除</button>
         </div>
-        <div class="diary-filter-hint">可用快捷鍵一鍵篩選，也可手動選日期，並支援刪除單筆紀錄。</div>
+        <div class="diary-filter-hint">先用下拉快速篩選，也可切到自訂日期精準查詢，並支援刪除單筆紀錄。</div>
       </div>
       <div id="diary-list" class="diary-list">
         <div class="diary-empty">登入後可查看最近情緒紀錄。</div>
@@ -1084,10 +1082,7 @@
     const diaryDateEndInput = document.getElementById("diary-date-end");
     const diaryDateApplyBtn = document.getElementById("diary-date-apply");
     const diaryDateClearBtn = document.getElementById("diary-date-clear");
-    const diaryRangeTodayBtn = document.getElementById("diary-range-today");
-    const diaryRange7dBtn = document.getElementById("diary-range-7d");
-    const diaryRange30dBtn = document.getElementById("diary-range-30d");
-    const diaryRangeAllBtn = document.getElementById("diary-range-all");
+    const diaryRangeSelect = document.getElementById("diary-range-select");
     const diaryList = document.getElementById("diary-list");
 
     let supabaseClient = null;
@@ -1281,19 +1276,10 @@
       return `${y}-${m}-${day}`;
     }
 
-    function updateQuickRangeButtons() {
-      const buttons = [
-        [diaryRangeTodayBtn, "today"],
-        [diaryRange7dBtn, "7d"],
-        [diaryRange30dBtn, "30d"],
-        [diaryRangeAllBtn, "all"],
-      ];
-      buttons.forEach(([btn, key]) => {
-        if (!btn) {
-          return;
-        }
-        btn.classList.toggle("active", diaryActiveQuickRange === key);
-      });
+    function syncDiaryRangeSelect() {
+      if (diaryRangeSelect) {
+        diaryRangeSelect.value = diaryActiveQuickRange;
+      }
     }
 
     function applyQuickRange(rangeKey) {
@@ -1304,7 +1290,13 @@
       if (rangeKey === "all") {
         diaryDateStartInput.value = "";
         diaryDateEndInput.value = "";
-        updateQuickRangeButtons();
+        syncDiaryRangeSelect();
+        renderDiaryEntries(cloudDiaryEntries);
+        return;
+      }
+
+      if (rangeKey === "custom") {
+        syncDiaryRangeSelect();
         renderDiaryEntries(cloudDiaryEntries);
         return;
       }
@@ -1322,7 +1314,7 @@
       startDate.setDate(startDate.getDate() - backDays);
       diaryDateStartInput.value = toDateInputValue(startDate);
       diaryDateEndInput.value = end;
-      updateQuickRangeButtons();
+      syncDiaryRangeSelect();
       renderDiaryEntries(cloudDiaryEntries);
     }
 
@@ -1919,7 +1911,7 @@
 
     diaryDateApplyBtn.addEventListener("click", () => {
       diaryActiveQuickRange = "custom";
-      updateQuickRangeButtons();
+      syncDiaryRangeSelect();
       renderDiaryEntries(cloudDiaryEntries);
     });
 
@@ -1929,30 +1921,19 @@
 
     diaryDateStartInput.addEventListener("change", () => {
       diaryActiveQuickRange = "custom";
-      updateQuickRangeButtons();
+      syncDiaryRangeSelect();
       renderDiaryEntries(cloudDiaryEntries);
     });
 
     diaryDateEndInput.addEventListener("change", () => {
       diaryActiveQuickRange = "custom";
-      updateQuickRangeButtons();
+      syncDiaryRangeSelect();
       renderDiaryEntries(cloudDiaryEntries);
     });
 
-    diaryRangeTodayBtn.addEventListener("click", () => {
-      applyQuickRange("today");
-    });
-
-    diaryRange7dBtn.addEventListener("click", () => {
-      applyQuickRange("7d");
-    });
-
-    diaryRange30dBtn.addEventListener("click", () => {
-      applyQuickRange("30d");
-    });
-
-    diaryRangeAllBtn.addEventListener("click", () => {
-      applyQuickRange("all");
+    diaryRangeSelect.addEventListener("change", (event) => {
+      const value = event.target.value;
+      applyQuickRange(value || "all");
     });
 
     diaryList.addEventListener("click", (event) => {
@@ -1968,7 +1949,7 @@
       deleteCloudDiaryEntry(entryId);
     });
 
-    updateQuickRangeButtons();
+    syncDiaryRangeSelect();
 
     initSupabaseAuth();
 
