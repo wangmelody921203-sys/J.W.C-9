@@ -102,6 +102,65 @@
       color: #ccfbe3;
     }
 
+    .diary-panel {
+      margin-top: 18px;
+      padding: 18px;
+      border-radius: 22px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+    }
+
+    .diary-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .diary-title {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: -0.01em;
+    }
+
+    .diary-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .diary-row {
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: grid;
+      gap: 6px;
+    }
+
+    .diary-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .diary-emotion {
+      color: #ccfbe3;
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    .diary-songs {
+      color: #d6deea;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .diary-empty {
+      color: var(--muted);
+      font-size: 13px;
+      padding: 8px 2px;
+    }
+
     .hero {
       display: grid;
       grid-template-columns: 1.15fr 0.85fr;
@@ -788,6 +847,16 @@
       </div>
       <div id="music-grid" class="music-grid"></div>
     </section>
+
+    <section class="diary-panel">
+      <div class="diary-header">
+        <h2 class="diary-title">我的情緒歷史</h2>
+        <button id="diary-refresh" class="btn-auth" type="button">重新整理</button>
+      </div>
+      <div id="diary-list" class="diary-list">
+        <div class="diary-empty">登入後可查看最近情緒紀錄。</div>
+      </div>
+    </section>
   </main>
 
   <canvas id="capture-canvas" class="hidden-canvas"></canvas>
@@ -919,6 +988,8 @@
     const authLogoutBtn = document.getElementById("auth-logout");
     const authSyncBtn = document.getElementById("auth-sync");
     const authStateLabel = document.getElementById("auth-state");
+    const diaryRefreshBtn = document.getElementById("diary-refresh");
+    const diaryList = document.getElementById("diary-list");
 
     let supabaseClient = null;
     let currentSession = null;
@@ -1093,6 +1164,68 @@
       authStateLabel.textContent = text;
     }
 
+    function formatDateTime(isoString) {
+      const d = new Date(isoString);
+      if (Number.isNaN(d.getTime())) {
+        return isoString;
+      }
+      return d.toLocaleString("zh-TW", { hour12: false });
+    }
+
+    function renderDiaryEntries(entries) {
+      diaryList.innerHTML = "";
+      if (!entries.length) {
+        diaryList.innerHTML = '<div class="diary-empty">目前還沒有雲端紀錄，先完成一次掃描看看。</div>';
+        return;
+      }
+
+      entries.forEach((entry) => {
+        const row = document.createElement("article");
+        row.className = "diary-row";
+
+        const songs = Array.isArray(entry.songs) ? entry.songs : [];
+        const songText = songs.length
+          ? songs.map((song) => song.title).filter(Boolean).slice(0, 3).join("、")
+          : "(無歌曲資料)";
+
+        row.innerHTML = `
+          <div class="diary-meta">${formatDateTime(entry.detected_at || entry.created_at || "")}</div>
+          <div class="diary-emotion">${EMOTION_LABELS_ZH[entry.emotion] || entry.emotion} ・ 佔比 ${entry.share ?? "0.0"}%</div>
+          <div class="diary-songs">推薦：${songText}</div>
+        `;
+        diaryList.appendChild(row);
+      });
+    }
+
+    async function fetchCloudDiaryEntries(manual = false) {
+      if (!currentSession?.access_token) {
+        renderDiaryEntries([]);
+        if (manual) {
+          alert("請先登入後再讀取雲端歷史。");
+        }
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/diary/list?limit=20&offset=0`, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${currentSession.access_token}`,
+          },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = data.error || "list_failed";
+          throw new Error(`讀取失敗：${msg}`);
+        }
+        renderDiaryEntries(Array.isArray(data.entries) ? data.entries : []);
+      } catch (err) {
+        if (manual) {
+          alert(err.message || "讀取失敗，請稍後再試。");
+        }
+      }
+    }
+
     function updateAuthButtons() {
       const loggedIn = Boolean(currentSession?.access_token);
       authSignupBtn.style.display = loggedIn ? "none" : "";
@@ -1163,6 +1296,7 @@
 
         markEntriesSynced(payload.entries.map((entry) => entry.client_entry_id));
         setAuthState(`帳戶：已登入（本次同步 ${payload.entries.length} 筆）`);
+        fetchCloudDiaryEntries(false);
         if (manual) {
           alert(`同步完成：${payload.entries.length} 筆`);
         }
@@ -1226,6 +1360,7 @@
       currentSession = data.session;
       if (currentSession?.user?.email) {
         setAuthState(`帳戶：${currentSession.user.email}`);
+        fetchCloudDiaryEntries(false);
       } else {
         setAuthState("帳戶：未登入");
       }
@@ -1236,8 +1371,10 @@
         if (currentSession?.user?.email) {
           setAuthState(`帳戶：${currentSession.user.email}`);
           syncMoodDiaryToCloud(false);
+          fetchCloudDiaryEntries(false);
         } else {
           setAuthState("帳戶：未登入");
+          renderDiaryEntries([]);
         }
         updateAuthButtons();
       });
@@ -1516,6 +1653,10 @@
 
     authSyncBtn.addEventListener("click", () => {
       syncMoodDiaryToCloud(true);
+    });
+
+    diaryRefreshBtn.addEventListener("click", () => {
+      fetchCloudDiaryEntries(true);
     });
 
     initSupabaseAuth();
