@@ -774,6 +774,8 @@
   <script>
     const API_BASE = "https://j-w-c-9.onrender.com";
     const SCAN_STORAGE_KEY = "emotionSense.latestScan";
+    const MOOD_DIARY_KEY = "emotionSense.moodDiary.v1";
+    const MOOD_DIARY_LIMIT = 120;
     const WINDOW_MS = 5000;
     const CAPTURE_MS = 850;
     const CAPTURE_W = 320;
@@ -912,6 +914,7 @@
         musicGrid.appendChild(article);
       });
       musicSubtitle.textContent = `本輪依 ${EMOTION_LABELS_ZH[emotion] || "未知"} 情緒隨機抽出 ${selected.length} 首，不再固定同一組歌單。`;
+      return selected;
     }
 
     function renderProbabilityList(probabilities) {
@@ -981,6 +984,37 @@
         // sessionStorage 不可用時，不中斷主流程
       }
     }
+
+    function loadMoodDiary() {
+      try {
+        const raw = localStorage.getItem(MOOD_DIARY_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function persistMoodDiary(entries) {
+      try {
+        localStorage.setItem(MOOD_DIARY_KEY, JSON.stringify(entries));
+      } catch (_) {
+        // localStorage 寫入失敗時，不中斷主流程
+      }
+    }
+
+    function addMoodDiaryEntry(entry) {
+      const entries = loadMoodDiary();
+      entries.unshift(entry);
+      if (entries.length > MOOD_DIARY_LIMIT) {
+        entries.length = MOOD_DIARY_LIMIT;
+      }
+      persistMoodDiary(entries);
+    }
+
+    // 先提供給後續頁面或帳戶同步流程調用。
+    window.getMoodDiaryEntries = loadMoodDiary;
+    window.clearMoodDiaryEntries = () => persistMoodDiary([]);
 
     function redirectToFeedback(summary) {
       persistLatestScan(summary);
@@ -1152,12 +1186,22 @@
       const resolvedEmotion = Object.keys(votes).length > 0 ? dominant : "no_face";
       updateResultCard(resolvedEmotion, share);
       renderProbabilityList(lastProbabilities);
-      renderMusic(resolvedEmotion);
+      const selectedSongs = renderMusic(resolvedEmotion);
       const latestScan = {
         emotion: resolvedEmotion,
         share,
         timestamp: new Date().toISOString(),
       };
+      addMoodDiaryEntry({
+        timestamp: latestScan.timestamp,
+        emotion: resolvedEmotion,
+        share,
+        songs: (selectedSongs || []).map((song) => ({
+          title: song.title,
+          type: song.type,
+          id: song.id,
+        })),
+      });
       stopCameraSession("掃描完成。點擊「分析回饋」按鈕前往回饋頁。");
       timerCaption.textContent = "掃描視窗 5 秒";
       resetVotes();
