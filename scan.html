@@ -888,9 +888,11 @@
       return copy;
     }
 
-    function renderMusicCards(items) {
+    function renderMusic(emotion) {
+      const pool = MUSIC_POOLS[emotion] || MUSIC_POOLS.uncertain;
+      const selected = shuffle(pool).slice(0, MUSIC_CARD_COUNT);
       musicGrid.innerHTML = "";
-      items.forEach((item) => {
+      selected.forEach((item) => {
         const embedPath = `https://open.spotify.com/embed/${item.type}/${item.id}?utm_source=generator&theme=0`;
         const openPath = `https://open.spotify.com/${item.type}/${item.id}`;
         const article = document.createElement("article");
@@ -903,33 +905,12 @@
             loading="lazy"
           ></iframe>
           <div class="music-card-footer">
-            <span class="music-name">${item.title}${item.artist ? " — " + item.artist : ""}</span>
+            <span class="music-name">${item.title}</span>
             <a class="music-open" href="${openPath}" target="_blank" rel="noopener">開啟</a>
           </div>
         `;
         musicGrid.appendChild(article);
       });
-    }
-
-    async function renderMusic(emotion) {
-      // 先嘗試從 Spotify API 取得動態結果
-      try {
-        const res = await fetch(`${API_BASE}/music?emotion=${encodeURIComponent(emotion)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.tracks && data.tracks.length > 0) {
-            const selected = shuffle(data.tracks).slice(0, MUSIC_CARD_COUNT);
-            renderMusicCards(selected);
-            musicSubtitle.textContent = `本輪依 ${EMOTION_LABELS_ZH[emotion] || "未知"} 情緒從 Spotify 隨機抽出 ${selected.length} 首。`;
-            return;
-          }
-        }
-      } catch (_) { /* 網路錯誤，fallback */ }
-
-      // Fallback：使用 hardcode 歌單
-      const pool = MUSIC_POOLS[emotion] || MUSIC_POOLS.uncertain;
-      const selected = shuffle(pool).slice(0, MUSIC_CARD_COUNT);
-      renderMusicCards(selected);
       musicSubtitle.textContent = `本輪依 ${EMOTION_LABELS_ZH[emotion] || "未知"} 情緒隨機抽出 ${selected.length} 首，不再固定同一組歌單。`;
     }
 
