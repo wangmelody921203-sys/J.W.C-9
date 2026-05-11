@@ -30,6 +30,49 @@ from emotion_camera import (
 app = Flask(__name__)
 CORS(app)
 
+_MODEL_PATH: Path | None = None
+_DETECTOR = None
+_SESSION = None
+_DETECT_INIT_ERROR = ""
+_DETECT_RETRY_AT = 0.0
+
+
+def _ensure_detection_runtime() -> tuple[bool, str | None]:
+    global _MODEL_PATH, _DETECTOR, _SESSION, _DETECT_INIT_ERROR, _DETECT_RETRY_AT
+
+    if _MODEL_PATH is not None and _DETECTOR is not None and _SESSION is not None:
+        return True, None
+
+    now = time.time()
+    if now < _DETECT_RETRY_AT:
+        remain = int(max(1, _DETECT_RETRY_AT - now))
+        msg = _DETECT_INIT_ERROR or "initializing"
+        return False, f"model_initializing_retry_in_{remain}s ({msg})"
+
+    last_error = ""
+    for attempt in range(1, 4):
+        try:
+            model_path = ensure_model(Path("models/emotion-ferplus-8.onnx"))
+            detector = load_face_detector()
+            session = load_emotion_session(model_path)
+
+            _MODEL_PATH = model_path
+            _DETECTOR = detector
+            _SESSION = session
+            _DETECT_INIT_ERROR = ""
+            _DETECT_RETRY_AT = 0.0
+            app.logger.info("Detection runtime initialized successfully.")
+            return True, None
+        except Exception as exc:
+            last_error = str(exc)
+            app.logger.warning("Detection runtime init attempt %s failed: %s", attempt, last_error)
+            if attempt < 3:
+                time.sleep(1.0)
+
+    _DETECT_INIT_ERROR = last_error or "unknown_error"
+    _DETECT_RETRY_AT = time.time() + 30.0
+    return False, _DETECT_INIT_ERROR
+
 # ──────────────────────────────────────────────
 # Groq 桌寵設定
 # ──────────────────────────────────────────────
@@ -360,10 +403,7 @@ def _flush_pending_feedback() -> int:
     _write_pending_feedback(remain)
     return flushed
 
-# Load once at startup so requests are fast.
-MODEL_PATH = ensure_model(Path("models/emotion-ferplus-8.onnx"))
-DETECTOR = load_face_detector()
-SESSION = load_emotion_session(MODEL_PATH)
+# Runtime is lazily initialized on demand to avoid startup crash when model download is unstable.
 
 
 @app.get("/")
@@ -387,7 +427,8 @@ def index():
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok"})
+    ready = _MODEL_PATH is not None and _DETECTOR is not None and _SESSION is not None
+    return jsonify({"status": "ok", "detect_runtime_ready": ready})
 
 
 @app.post("/diary/sync")
@@ -541,6 +582,10 @@ def diary_delete(entry_id: str):
 
 @app.post("/detect")
 def detect():
+    ready, init_error = _ensure_detection_runtime()
+    if not ready:
+        return jsonify({"error": "detect_runtime_unavailable", "details": init_error}), 503
+
     payload = request.get_json(silent=True) or {}
     frame_data = payload.get("frame")
     if not isinstance(frame_data, str) or not frame_data:
@@ -561,7 +606,7 @@ def detect():
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     img_h, img_w = frame.shape[:2]
-    faces = detect_faces(DETECTOR, gray, min_face=48)
+    faces = detect_faces(_DETECTOR, gray, min_face=48)
     if len(faces) == 0:
         return jsonify(
             {
@@ -575,7 +620,7 @@ def detect():
     x, y, w, h = max(faces, key=lambda box: box[2] * box[3])
     face_region = padded_face_region(gray, (x, y, w, h), padding=0.22)
     _, probabilities = classify_emotion(
-        SESSION,
+        _SESSION,
         face_region,
         neutral_penalty=0.5,
         emotion_boost=1.3,
