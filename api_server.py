@@ -89,6 +89,16 @@ FEEDBACK_QUEUE_FILE = Path("emotion_output/pending_feedback.jsonl")
 FEEDBACK_WEBHOOK_ENV = "FEEDBACK_WEBHOOK_URL"
 SUPABASE_URL_ENV = "SUPABASE_URL"
 SUPABASE_SERVICE_KEY_ENV = "SUPABASE_SERVICE_ROLE_KEY"
+DEFAULT_CLOUD_DIARY_MAX_ENTRIES_PER_USER = 500
+
+
+def _get_cloud_diary_max_entries_per_user() -> int:
+    raw = os.environ.get("CLOUD_DIARY_MAX_ENTRIES_PER_USER", str(DEFAULT_CLOUD_DIARY_MAX_ENTRIES_PER_USER)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_CLOUD_DIARY_MAX_ENTRIES_PER_USER
+    return max(50, value)
 
 
 def _get_supabase_config() -> tuple[str, str] | tuple[None, None]:
@@ -172,6 +182,62 @@ def _supabase_rest_request(
         return e.code, parsed
     except Exception as e:
         return 500, {"error": str(e)}
+
+
+def _prune_user_diary_entries(
+    *,
+    supabase_url: str,
+    service_key: str,
+    user_id: str,
+    keep_limit: int,
+) -> tuple[int, str | None]:
+    if keep_limit <= 0:
+        return 0, None
+
+    removed_total = 0
+    page_size = 200
+    while True:
+        status, data = _supabase_rest_request(
+            method="GET",
+            path="/rest/v1/mood_entries",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "select": "id",
+                "user_id": f"eq.{user_id}",
+                "order": "detected_at.desc,created_at.desc,id.desc",
+                "offset": str(keep_limit),
+                "limit": str(page_size),
+            },
+        )
+        if status != 200:
+            return removed_total, "supabase_prune_query_failed"
+
+        rows = data if isinstance(data, list) else []
+        if not rows:
+            return removed_total, None
+
+        ids = [str(row.get("id", "")).strip() for row in rows]
+        ids = [value for value in ids if value]
+        if not ids:
+            return removed_total, None
+
+        id_filter = f"in.({','.join(ids)})"
+        del_status, _ = _supabase_rest_request(
+            method="DELETE",
+            path="/rest/v1/mood_entries",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "user_id": f"eq.{user_id}",
+                "id": id_filter,
+            },
+            prefer="return=representation",
+        )
+        if del_status not in (200, 204):
+            return removed_total, "supabase_prune_delete_failed"
+
+        removed_total += len(ids)
 
 
 def _sanitize_diary_entries(raw_entries: list, user_id: str) -> list[dict]:
@@ -343,6 +409,8 @@ def diary_sync():
     if not isinstance(entries, list):
         return jsonify({"error": "invalid_entries"}), 400
 
+    keep_limit = _get_cloud_diary_max_entries_per_user()
+
     cleaned_entries = _sanitize_diary_entries(entries, user_id)
     if not cleaned_entries:
         return jsonify({"ok": True, "inserted_count": 0, "duplicate_count": 0})
@@ -359,9 +427,26 @@ def diary_sync():
     if status not in (200, 201):
         return jsonify({"error": "supabase_insert_failed", "details": data}), 502
 
+    pruned_count, prune_error = _prune_user_diary_entries(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        keep_limit=keep_limit,
+    )
+    if prune_error:
+        return jsonify({"error": prune_error, "details": {"keep_limit": keep_limit}}), 502
+
     inserted = len(data) if isinstance(data, list) else 0
     duplicate = max(0, len(cleaned_entries) - inserted)
-    return jsonify({"ok": True, "inserted_count": inserted, "duplicate_count": duplicate})
+    return jsonify(
+        {
+            "ok": True,
+            "inserted_count": inserted,
+            "duplicate_count": duplicate,
+            "pruned_count": pruned_count,
+            "keep_limit": keep_limit,
+        }
+    )
 
 
 @app.get("/diary/list")
