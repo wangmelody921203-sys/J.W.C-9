@@ -1360,15 +1360,65 @@
       no_face: "Lo-fi 電子",
     };
 
+    const MUSIC_CATEGORY_BY_TRACK_ID = {
+      "0VjIjW4GlUZAMYd2vXMi3b": "Synth-pop",
+      "463CkQjx2Zk1yXoBuierM9": "Disco Pop",
+      "4LRPiXqCikLlN15c3yImP7": "Pop Rock",
+      "6UelLqGlWMcVH1E5c4H7lY": "Pop",
+      "1WkMMavIMc4JZ8cfMmxHkI": "Dance Pop",
+      "2DEZmgHKAvm41k4J3R2E9Y": "Pop Rock",
+      "4kflIGfjdZJW4ot2ioixTB": "抒情鋼琴",
+      "5wANPM4fQCJwkGd4rN57mH": "Bedroom Pop",
+      "4xqrdfXkTW4T0RauPLv3WA": "Indie Pop",
+      "3moR6A8kCWHXQ6dS2x1xup": "抒情流行",
+      "2jyjQ79b6zLBxSqpTS2pZp": "民謠流行",
+      "5uCax9HTNlzGybIStD3vDh": "抒情流行",
+      "0pqnGHJpmpxLKifKRmU6WP": "Alternative Rock",
+      "1nInOsHbtotAmEOQhtvnzP": "Hip-Hop",
+      "2nLtzopw4rPReszdYBJU6h": "Nu Metal",
+      "7KXjTSCq5nL1LoYtL7XAwS": "Hip-Hop",
+      "2gZUPNdnz5Y45eiGxpHGSc": "Hip-Hop",
+      "1r9xUipOqoNwggBpENDsvJ": "Alternative Pop",
+      "5ghIJDpPoe3CfHMGu71E6T": "Grunge",
+      "3dPQuX8Gs42Y7b454ybpMR": "Garage Rock",
+      "2DlHlPMa4M17kufBvI2lEN": "Nu Metal",
+      "59WN2psjkt1tyaxjspN8fp": "Rap Metal",
+      "0snQkGI5qnAmohLE7jTsTn": "Alternative Metal",
+      "1d6KS4GH06JAd19uiJn7R4": "Stoner Rock",
+      "1BncfTJAWxrsxyT9culBrj": "Neo-Classical",
+      "6pWgRkpqVfxnj3WuIcJ7WP": "電影配樂",
+      "0U3f5Bj6K1XhT7aYPiJGUj": "Ambient",
+      "3DK6m7It6Pw857FcQftMds": "Hip-Hop",
+      "5ihS6UUlyQAfmp48eSkxuQ": "Ambient",
+      "35KiiILklye1JRRctaLUb4": "Indie Folk",
+      "0wXuerDYiBnERgIpbb3JBR": "Psychedelic Soul",
+      "5NhlpQ6BOIz3S5yH9Kz6mC": "Alternative R&B",
+      "1RMJOxR6GRPsBHL8qeC2ux": "Neo Soul",
+      "3xKsf9qdS1CyvXSMEid6g8": "Alternative R&B",
+      "2iyv2mXZ5nI8K4V3dPDP6m": "Indie R&B",
+      "0auXrO3N6a1RLXANfmrUGa": "R&B",
+      "3FZLeaHnBWd4Pkcj3e6QWQ": "Chill Electronic",
+      "6kkwzB6hXLIONkEk9JciA6": "Ambient",
+      "6ZFbXIJkuI1dVNWvzJzown": "Ambient Electronic",
+      "5lN1EH25gdiqT1SFALMAq1": "Future Bass",
+      "3KkXRkHbMCARz0aVfEt68P": "Pop",
+      "2ZWlPOoWh0626oTaHrnl2a": "Alternative R&B",
+    };
+
     function initializeMusicPoolCategories() {
       Object.entries(MUSIC_POOLS).forEach(([emotion, list]) => {
-        const category = MUSIC_CATEGORY_BY_EMOTION[emotion] || "未分類";
         if (!Array.isArray(list)) {
           return;
         }
         list.forEach((song) => {
+          const trackId = String(song.id || "").trim();
+          const byTrack = MUSIC_CATEGORY_BY_TRACK_ID[trackId];
+          if (byTrack) {
+            song.category = byTrack;
+            return;
+          }
           if (!song.category) {
-            song.category = category;
+            song.category = MUSIC_CATEGORY_BY_EMOTION[emotion] || "未分類";
           }
         });
       });
@@ -1439,6 +1489,10 @@
     }
 
     function resolveSongCategory(song, fallbackEmotion = "unknown") {
+      const trackId = String(song?.id || "").trim();
+      if (trackId && MUSIC_CATEGORY_BY_TRACK_ID[trackId]) {
+        return MUSIC_CATEGORY_BY_TRACK_ID[trackId];
+      }
       if (song && song.category && String(song.category).trim()) {
         return String(song.category).trim();
       }
@@ -1701,7 +1755,7 @@
       const selected = shuffle(pool).slice(0, MUSIC_CARD_COUNT);
       musicGrid.innerHTML = "";
       selected.forEach((item) => {
-        const category = item.category || MUSIC_CATEGORY_BY_EMOTION[emotion] || "未分類";
+        const category = resolveSongCategory(item, emotion);
         const embedPath = `https://open.spotify.com/embed/${item.type}/${item.id}?utm_source=generator&theme=0`;
         const openPath = `https://open.spotify.com/${item.type}/${item.id}`;
         const article = document.createElement("article");
@@ -1732,7 +1786,7 @@
       musicSubtitle.textContent = `本輪依 ${EMOTION_LABELS_ZH[emotion] || "未知"} 情緒隨機抽出 ${selected.length} 首，不再固定同一組歌單。`;
       return selected.map((song) => ({
         ...song,
-        category: song.category || MUSIC_CATEGORY_BY_EMOTION[emotion] || "未分類",
+        category: resolveSongCategory(song, emotion),
       }));
     }
 
