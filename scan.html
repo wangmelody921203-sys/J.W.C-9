@@ -255,6 +255,11 @@
       font-size: 12px;
     }
 
+    .analytics-clear-btn {
+      border-color: rgba(251, 191, 36, 0.4);
+      color: #ffe8b0;
+    }
+
     .analytics-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -1093,6 +1098,7 @@
           <h2 class="analytics-title">情緒波動分析</h2>
           <p class="analytics-subtitle">付費版核心洞察：每日情緒曲線、星期 x 時段平均，以及音樂類別偏好。</p>
         </div>
+        <button id="analytics-clear-music-stats" class="btn-auth analytics-clear-btn" type="button">清除音樂偏好統計</button>
       </div>
       <div id="analytics-kpi-row" class="analytics-kpi-row">
         <div class="analytics-kpi">
@@ -1273,6 +1279,7 @@
     const weekdaySlotCanvas = document.getElementById("weekday-slot-chart");
     const insightList = document.getElementById("insight-list");
     const analyticsKpiRow = document.getElementById("analytics-kpi-row");
+    const analyticsClearMusicStatsBtn = document.getElementById("analytics-clear-music-stats");
 
     let supabaseClient = null;
     let currentSession = null;
@@ -1375,6 +1382,15 @@
       const current = Number(stats[key] || 0);
       stats[key] = current + 1;
       saveMusicClickStats(stats);
+      refreshAnalytics();
+    }
+
+    function clearMusicClickStats() {
+      try {
+        localStorage.removeItem(MUSIC_CLICK_STATS_KEY);
+      } catch (_) {
+        // 忽略 localStorage 清除失敗
+      }
       refreshAnalytics();
     }
 
@@ -2513,6 +2529,15 @@
 
     diaryRangeAllBtn.addEventListener("click", () => {
       applyQuickRange("all");
+    });
+
+    analyticsClearMusicStatsBtn.addEventListener("click", () => {
+      const ok = window.confirm("確定要清除音樂偏好統計嗎？\n這不會刪除情緒歷史，只會重置偏好類別點擊次數。");
+      if (!ok) {
+        return;
+      }
+      clearMusicClickStats();
+      alert("音樂偏好統計已清除。");
     });
 
     diaryList.addEventListener("click", (event) => {
