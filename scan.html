@@ -225,6 +225,104 @@
       cursor: wait;
     }
 
+    .analytics-panel {
+      margin-top: 18px;
+      padding: 18px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(14, 22, 32, 0.88) 0%, rgba(9, 14, 22, 0.84) 100%);
+      border: 1px solid rgba(80, 139, 255, 0.2);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+      animation: panel-rise 560ms ease both;
+    }
+
+    .analytics-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .analytics-title {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: -0.01em;
+    }
+
+    .analytics-subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .analytics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .analytics-card {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 14px;
+      padding: 12px;
+      min-height: 280px;
+      animation: card-float 6.2s ease-in-out infinite;
+    }
+
+    .analytics-card:nth-child(2) {
+      animation-delay: 0.8s;
+    }
+
+    .analytics-card h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      color: #c8ddff;
+    }
+
+    .analytics-chart-wrap {
+      position: relative;
+      height: 220px;
+    }
+
+    .insight-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .insight-item {
+      border: 1px solid rgba(50, 217, 124, 0.18);
+      background: rgba(50, 217, 124, 0.06);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      color: #defbe9;
+      line-height: 1.5;
+    }
+
+    .insight-item strong {
+      color: #89ffc0;
+    }
+
+    @keyframes panel-rise {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes card-float {
+      0%,
+      100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+
     .hero {
       display: grid;
       grid-template-columns: 1.15fr 0.85fr;
@@ -657,6 +755,10 @@
         grid-template-columns: 1fr;
       }
 
+      .analytics-grid {
+        grid-template-columns: 1fr;
+      }
+
       .diary-filter-row {
         align-items: stretch;
       }
@@ -948,6 +1050,32 @@
         <div class="diary-empty">登入後可查看最近情緒紀錄。</div>
       </div>
     </section>
+
+    <section class="analytics-panel">
+      <div class="analytics-header">
+        <div>
+          <h2 class="analytics-title">情緒波動分析</h2>
+          <p class="analytics-subtitle">付費版核心洞察：每日情緒曲線、星期 x 時段平均，以及音樂類別偏好。</p>
+        </div>
+      </div>
+      <div class="analytics-grid">
+        <article class="analytics-card">
+          <h3>每日情緒分數波動</h3>
+          <div class="analytics-chart-wrap">
+            <canvas id="emotion-trend-chart"></canvas>
+          </div>
+        </article>
+        <article class="analytics-card">
+          <h3>星期 x 時段情緒平均</h3>
+          <div class="analytics-chart-wrap">
+            <canvas id="weekday-slot-chart"></canvas>
+          </div>
+        </article>
+      </div>
+      <div id="insight-list" class="insight-list">
+        <div class="insight-item">登入後將自動生成洞察。</div>
+      </div>
+    </section>
   </main>
 
   <canvas id="capture-canvas" class="hidden-canvas"></canvas>
@@ -972,6 +1100,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script>
     const API_BASE = "https://j-w-c-9.onrender.com";
     const SUPABASE_URL = "https://yqcyyenuksulrbyvzpkv.supabase.co";
@@ -979,6 +1108,7 @@
     const SCAN_STORAGE_KEY = "emotionSense.latestScan";
     const MOOD_DIARY_KEY = "emotionSense.moodDiary.v1";
     const MOOD_DIARY_LIMIT = 120;
+    const MUSIC_CLICK_STATS_KEY = "emotionSense.musicCategoryClicks.v1";
     const WINDOW_MS = 5000;
     const CAPTURE_MS = 850;
     const CAPTURE_W = 320;
@@ -1089,12 +1219,17 @@
     const diaryRange30dBtn = document.getElementById("diary-range-30d");
     const diaryRangeAllBtn = document.getElementById("diary-range-all");
     const diaryList = document.getElementById("diary-list");
+    const emotionTrendCanvas = document.getElementById("emotion-trend-chart");
+    const weekdaySlotCanvas = document.getElementById("weekday-slot-chart");
+    const insightList = document.getElementById("insight-list");
 
     let supabaseClient = null;
     let currentSession = null;
     let cloudDiaryEntries = [];
     const diaryDeletingIds = new Set();
     let diaryActiveQuickRange = "all";
+    let emotionTrendChart = null;
+    let weekdaySlotChart = null;
 
     let mediaStream = null;
     let captureTimer = null;
@@ -1105,6 +1240,57 @@
     let lastProbabilities = null;
     const votes = {};
 
+    const WEEKDAY_ZH = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
+    const SLOT_LABELS = ["00-06", "06-12", "12-18", "18-24"];
+    const SLOT_TITLES = ["凌晨", "上午", "下午", "晚上"];
+    const EMOTION_SCORES = {
+      happiness: 1.0,
+      sadness: -0.7,
+      anger: -0.95,
+      disgust: -0.75,
+      fear: -0.85,
+      contempt: -0.55,
+      uncertain: -0.1,
+      unknown: 0.0,
+      no_face: 0.0,
+    };
+    const EMOTION_STRESS_WEIGHTS = {
+      happiness: 0.1,
+      sadness: 0.75,
+      anger: 1.0,
+      disgust: 0.7,
+      fear: 0.95,
+      contempt: 0.55,
+      uncertain: 0.35,
+      unknown: 0.3,
+      no_face: 0.2,
+    };
+    const MUSIC_CATEGORY_BY_EMOTION = {
+      happiness: "流行舞曲",
+      sadness: "抒情慢歌",
+      anger: "重節奏",
+      disgust: "搖滾龐克",
+      fear: "電影氛圍",
+      contempt: "R&B 靈魂",
+      uncertain: "Lo-fi 電子",
+      unknown: "Lo-fi 電子",
+      no_face: "Lo-fi 電子",
+    };
+
+    function initializeMusicPoolCategories() {
+      Object.entries(MUSIC_POOLS).forEach(([emotion, list]) => {
+        const category = MUSIC_CATEGORY_BY_EMOTION[emotion] || "未分類";
+        if (!Array.isArray(list)) {
+          return;
+        }
+        list.forEach((song) => {
+          if (!song.category) {
+            song.category = category;
+          }
+        });
+      });
+    }
+
     function shuffle(items) {
       const copy = [...items];
       for (let i = copy.length - 1; i > 0; i -= 1) {
@@ -1114,11 +1300,251 @@
       return copy;
     }
 
+    function getMusicClickStats() {
+      try {
+        const raw = localStorage.getItem(MUSIC_CLICK_STATS_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === "object" ? parsed : {};
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function saveMusicClickStats(stats) {
+      try {
+        localStorage.setItem(MUSIC_CLICK_STATS_KEY, JSON.stringify(stats));
+      } catch (_) {
+        // 忽略 localStorage 寫入失敗
+      }
+    }
+
+    function recordMusicCategoryClick(category) {
+      const key = String(category || "未分類").trim() || "未分類";
+      const stats = getMusicClickStats();
+      const current = Number(stats[key] || 0);
+      stats[key] = current + 1;
+      saveMusicClickStats(stats);
+      refreshAnalytics();
+    }
+
+    function parseEntryDate(entry) {
+      const source = entry.detected_at || entry.created_at || entry.timestamp || "";
+      const d = new Date(source);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    function getSlotIndex(hour) {
+      if (hour < 6) return 0;
+      if (hour < 12) return 1;
+      if (hour < 18) return 2;
+      return 3;
+    }
+
+    function computeAnalytics(entries) {
+      const valid = (entries || []).map((entry) => {
+        const date = parseEntryDate(entry);
+        if (!date) {
+          return null;
+        }
+        const emotion = String(entry.emotion || "unknown").toLowerCase();
+        const share = Math.max(0, Math.min(100, Number(entry.share ?? 0))) / 100;
+        return { entry, date, emotion, share: Number.isFinite(share) ? share : 0 };
+      }).filter(Boolean);
+
+      const dayMap = new Map();
+      const slotAgg = Array.from({ length: 7 }, () => Array.from({ length: 4 }, () => ({ score: 0, stress: 0, count: 0 })));
+
+      valid.forEach((item) => {
+        const dayKey = `${item.date.getFullYear()}-${String(item.date.getMonth() + 1).padStart(2, "0")}-${String(item.date.getDate()).padStart(2, "0")}`;
+        const moodScore = (EMOTION_SCORES[item.emotion] ?? 0) * Math.max(item.share, 0.35);
+        const stressScore = (EMOTION_STRESS_WEIGHTS[item.emotion] ?? 0.2) * Math.max(item.share, 0.35);
+
+        if (!dayMap.has(dayKey)) {
+          dayMap.set(dayKey, { score: 0, stress: 0, count: 0 });
+        }
+        const dayRow = dayMap.get(dayKey);
+        dayRow.score += moodScore;
+        dayRow.stress += stressScore;
+        dayRow.count += 1;
+
+        const weekday = item.date.getDay();
+        const slot = getSlotIndex(item.date.getHours());
+        slotAgg[weekday][slot].score += moodScore;
+        slotAgg[weekday][slot].stress += stressScore;
+        slotAgg[weekday][slot].count += 1;
+      });
+
+      const trendLabels = [...dayMap.keys()].sort();
+      const trendValues = trendLabels.map((k) => {
+        const row = dayMap.get(k);
+        return row.count ? Number((row.score / row.count).toFixed(3)) : 0;
+      });
+
+      const slotByPeriod = SLOT_TITLES.map((slotName, slotIndex) => ({
+        label: slotName,
+        data: WEEKDAY_ZH.map((_, weekday) => {
+          const row = slotAgg[weekday][slotIndex];
+          return row.count ? Number((row.score / row.count).toFixed(3)) : null;
+        }),
+      }));
+
+      let maxStress = { weekday: 0, slot: 0, value: -1 };
+      let maxHappy = { weekday: 0, slot: 0, value: -2 };
+      for (let w = 0; w < 7; w += 1) {
+        for (let s = 0; s < 4; s += 1) {
+          const row = slotAgg[w][s];
+          if (!row.count) continue;
+          const stressAvg = row.stress / row.count;
+          const moodAvg = row.score / row.count;
+          if (stressAvg > maxStress.value) {
+            maxStress = { weekday: w, slot: s, value: stressAvg };
+          }
+          if (moodAvg > maxHappy.value) {
+            maxHappy = { weekday: w, slot: s, value: moodAvg };
+          }
+        }
+      }
+
+      return {
+        trendLabels,
+        trendValues,
+        slotByPeriod,
+        maxStress,
+        maxHappy,
+        sampleCount: valid.length,
+      };
+    }
+
+    function destroyAnalyticsCharts() {
+      if (emotionTrendChart) {
+        emotionTrendChart.destroy();
+        emotionTrendChart = null;
+      }
+      if (weekdaySlotChart) {
+        weekdaySlotChart.destroy();
+        weekdaySlotChart = null;
+      }
+    }
+
+    function renderAnalyticsCharts(summary) {
+      if (!window.Chart || !emotionTrendCanvas || !weekdaySlotCanvas) {
+        return;
+      }
+
+      destroyAnalyticsCharts();
+
+      emotionTrendChart = new Chart(emotionTrendCanvas, {
+        type: "line",
+        data: {
+          labels: summary.trendLabels,
+          datasets: [
+            {
+              label: "情緒分數",
+              data: summary.trendValues,
+              borderColor: "#4ade80",
+              backgroundColor: "rgba(74, 222, 128, 0.22)",
+              fill: true,
+              tension: 0.35,
+              pointRadius: 3,
+              pointHoverRadius: 5,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 700, easing: "easeOutQuart" },
+          scales: {
+            x: { ticks: { color: "#9fb0c8" }, grid: { color: "rgba(255,255,255,0.04)" } },
+            y: {
+              min: -1,
+              max: 1,
+              ticks: { color: "#9fb0c8" },
+              grid: { color: "rgba(255,255,255,0.05)" },
+            },
+          },
+          plugins: {
+            legend: { labels: { color: "#d7e7ff" } },
+          },
+        },
+      });
+
+      weekdaySlotChart = new Chart(weekdaySlotCanvas, {
+        type: "bar",
+        data: {
+          labels: WEEKDAY_ZH,
+          datasets: summary.slotByPeriod.map((group, index) => ({
+            label: group.label,
+            data: group.data,
+            borderRadius: 8,
+            backgroundColor: ["#60a5fa", "#34d399", "#f59e0b", "#f472b6"][index] + "cc",
+          })),
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 680, easing: "easeOutCubic" },
+          scales: {
+            x: { stacked: false, ticks: { color: "#9fb0c8" }, grid: { color: "rgba(255,255,255,0.03)" } },
+            y: {
+              min: -1,
+              max: 1,
+              ticks: { color: "#9fb0c8" },
+              grid: { color: "rgba(255,255,255,0.05)" },
+            },
+          },
+          plugins: {
+            legend: { labels: { color: "#d7e7ff" } },
+          },
+        },
+      });
+    }
+
+    function renderInsights(summary) {
+      if (!insightList) {
+        return;
+      }
+      insightList.innerHTML = "";
+
+      if (!summary.sampleCount) {
+        insightList.innerHTML = '<div class="insight-item">目前資料不足，完成掃描並同步後可生成洞察。</div>';
+        return;
+      }
+
+      const stressText = `${WEEKDAY_ZH[summary.maxStress.weekday]} ${SLOT_LABELS[summary.maxStress.slot]} 壓力分數最高`;
+      const happyText = `${WEEKDAY_ZH[summary.maxHappy.weekday]} ${SLOT_LABELS[summary.maxHappy.slot]} 愉悅分數最高`;
+      const clickStats = getMusicClickStats();
+      const topCategory = Object.entries(clickStats)
+        .sort((a, b) => b[1] - a[1])[0];
+      const musicText = topCategory
+        ? `你最近最常點選的音樂類別是 <strong>${topCategory[0]}</strong>（${topCategory[1]} 次）`
+        : "你尚未點擊音樂開啟連結，點擊後會開始統計偏好類別。";
+
+      [
+        `<strong>洞察 1：</strong>${stressText}`,
+        `<strong>洞察 2：</strong>${happyText}`,
+        `<strong>洞察 3：</strong>${musicText}`,
+      ].forEach((text) => {
+        const row = document.createElement("div");
+        row.className = "insight-item";
+        row.innerHTML = text;
+        insightList.appendChild(row);
+      });
+    }
+
+    function refreshAnalytics() {
+      const entries = getFilteredDiaryEntries();
+      const summary = computeAnalytics(entries);
+      renderAnalyticsCharts(summary);
+      renderInsights(summary);
+    }
+
     function renderMusic(emotion) {
       const pool = MUSIC_POOLS[emotion] || MUSIC_POOLS.uncertain;
       const selected = shuffle(pool).slice(0, MUSIC_CARD_COUNT);
       musicGrid.innerHTML = "";
       selected.forEach((item) => {
+        const category = item.category || MUSIC_CATEGORY_BY_EMOTION[emotion] || "未分類";
         const embedPath = `https://open.spotify.com/embed/${item.type}/${item.id}?utm_source=generator&theme=0`;
         const openPath = `https://open.spotify.com/${item.type}/${item.id}`;
         const article = document.createElement("article");
@@ -1132,13 +1558,22 @@
           ></iframe>
           <div class="music-card-footer">
             <span class="music-name">${item.title}</span>
-            <a class="music-open" href="${openPath}" target="_blank" rel="noopener">開啟</a>
+            <a class="music-open" href="${openPath}" data-category="${category}" target="_blank" rel="noopener">開啟</a>
           </div>
         `;
+        const openLink = article.querySelector(".music-open");
+        if (openLink) {
+          openLink.addEventListener("click", () => {
+            recordMusicCategoryClick(category);
+          });
+        }
         musicGrid.appendChild(article);
       });
       musicSubtitle.textContent = `本輪依 ${EMOTION_LABELS_ZH[emotion] || "未知"} 情緒隨機抽出 ${selected.length} 首，不再固定同一組歌單。`;
-      return selected;
+      return selected.map((song) => ({
+        ...song,
+        category: song.category || MUSIC_CATEGORY_BY_EMOTION[emotion] || "未分類",
+      }));
     }
 
     function renderProbabilityList(probabilities) {
@@ -1373,6 +1808,7 @@
         diaryList.innerHTML = hasFilter
           ? '<div class="diary-empty">這個日期區間沒有紀錄，請調整篩選條件。</div>'
           : '<div class="diary-empty">目前還沒有雲端紀錄，先完成一次掃描看看。</div>';
+        refreshAnalytics();
         return;
       }
 
@@ -1400,6 +1836,8 @@
         `;
         diaryList.appendChild(row);
       });
+
+      refreshAnalytics();
     }
 
     async function deleteCloudDiaryEntry(entryId) {
@@ -1454,26 +1892,37 @@
 
       console.log("[diary] Fetching cloud entries with token:", currentSession.access_token.substring(0, 20) + "...");
       try {
-        const res = await fetch(`${API_BASE}/diary/list?limit=20&offset=0`, {
-          method: "GET",
-          headers: {
-            "Authorization": `Bearer ${currentSession.access_token}`,
-          },
-        });
-        console.log("[diary] Response status:", res.status);
-        
-        const data = await res.json().catch((err) => {
-          console.error("[diary] JSON parse error:", err);
-          return {};
-        });
-        console.log("[diary] Response data:", data);
-        
-        if (!res.ok) {
-          const msg = data.error || data.message || `HTTP ${res.status}`;
-          throw new Error(`讀取失敗：${msg}`);
+        const allEntries = [];
+        const pageLimit = 200;
+        let offset = 0;
+
+        while (offset < 1000) {
+          const res = await fetch(`${API_BASE}/diary/list?limit=${pageLimit}&offset=${offset}`, {
+            method: "GET",
+            headers: {
+              "Authorization": `Bearer ${currentSession.access_token}`,
+            },
+          });
+          console.log("[diary] Response status:", res.status, "offset:", offset);
+
+          const data = await res.json().catch((err) => {
+            console.error("[diary] JSON parse error:", err);
+            return {};
+          });
+          if (!res.ok) {
+            const msg = data.error || data.message || `HTTP ${res.status}`;
+            throw new Error(`讀取失敗：${msg}`);
+          }
+
+          const batch = Array.isArray(data.entries) ? data.entries : [];
+          allEntries.push(...batch);
+          if (batch.length < pageLimit) {
+            break;
+          }
+          offset += pageLimit;
         }
-        
-        const entries = Array.isArray(data.entries) ? data.entries : [];
+
+        const entries = allEntries;
         console.log("[diary] Rendering", entries.length, "entries");
         renderDiaryEntries(entries);
       } catch (err) {
@@ -1826,6 +2275,7 @@
           title: song.title,
           type: song.type,
           id: song.id,
+          category: song.category || MUSIC_CATEGORY_BY_EMOTION[resolvedEmotion] || "未分類",
         })),
       });
       syncMoodDiaryToCloud(false);
@@ -1888,6 +2338,7 @@
       timerCaption.textContent = "掃描視窗 5 秒";
     });
 
+    initializeMusicPoolCategories();
     renderProbabilityList();
     renderMusic("uncertain");
 

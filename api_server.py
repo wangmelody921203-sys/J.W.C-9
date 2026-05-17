@@ -314,6 +314,7 @@ def _sanitize_diary_entries(raw_entries: list, user_id: str) -> list[dict]:
                         "title": str(song.get("title", "")).strip()[:120],
                         "type": str(song.get("type", "track")).strip()[:20] or "track",
                         "id": str(song.get("id", "")).strip()[:64],
+                        "category": str(song.get("category", "")).strip()[:48],
                     }
                 )
         cleaned.append(
