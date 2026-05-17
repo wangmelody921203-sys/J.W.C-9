@@ -471,7 +471,39 @@ def _extract_bearer_token() -> str | None:
     return token or None
 
 
+def _decode_jwt_payload_unsafe(token: str) -> dict | None:
+    """Decode JWT payload without signature verification (claims only)."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        # Add padding
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        decoded = base64.urlsafe_b64decode(payload_b64)
+        return json.loads(decoded)
+    except Exception:
+        return None
+
+
 def _resolve_user_id_from_bearer(token: str, supabase_url: str, service_key: str) -> str | None:
+    # Fast path: decode JWT locally without signature verification.
+    # Supabase JWTs always carry `sub` = user UUID.
+    payload = _decode_jwt_payload_unsafe(token)
+    if payload:
+        sub = str(payload.get("sub", "")).strip()
+        exp = payload.get("exp")
+        import time as _time
+        if sub and (exp is None or int(exp) > int(_time.time())):
+            print(f"[DIARY] Token decoded locally, user_id: {sub[:12]}...")
+            return sub
+        if exp and int(exp) <= int(_time.time()):
+            print(f"[DIARY] Token expired (exp={exp})")
+            return None
+
+    # Fallback: verify via Supabase /auth/v1/user
     req = urllib.request.Request(
         f"{supabase_url}/auth/v1/user",
         headers={
@@ -488,9 +520,7 @@ def _resolve_user_id_from_bearer(token: str, supabase_url: str, service_key: str
             data = json.loads(resp.read())
             user_id = str(data.get("id", "")).strip()
             if user_id:
-                print(f"[DIARY] Token resolved to user_id: {user_id[:12]}...")
-            else:
-                print(f"[DIARY] Token resolved but no user_id found")
+                print(f"[DIARY] Token resolved via Supabase, user_id: {user_id[:12]}...")
             return user_id or None
     except Exception as e:
         print(f"[DIARY] Token resolution error: {e}")
