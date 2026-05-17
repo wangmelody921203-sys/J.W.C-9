@@ -946,6 +946,10 @@
       font-size: 12px;
       outline: none;
     }
+    .pet-session-select option {
+      color: #0f172a;
+      background: #f8fafc;
+    }
     .pet-session-btn {
       min-width: 36px;
       height: 32px;
@@ -2809,6 +2813,7 @@
     let petCurrentSessionId = "";
     let petSessionsLoadedUserKey = "";
     let petLocalSessionHistories = {};
+    let petLocalLoadedStorageKey = "";
     let petCloudHealthy = true;
     let petWaiting = false;
 
@@ -2837,9 +2842,123 @@
       petSessionDeleteBtn.title = enabled ? "刪除雲端聊天室" : "刪除本機聊天室";
     }
 
+    function petGetLocalStorageKey() {
+      const userKey = petGetUserKey() || "guest";
+      return `pet-local-chat-v1:${userKey}`;
+    }
+
+    function petPersistLocalState() {
+      try {
+        const storageKey = petGetLocalStorageKey();
+        const localSessions = petSessions
+          .filter((item) => String(item?.id || "").startsWith("local-"))
+          .map((item) => ({
+            id: String(item.id),
+            title: String(item.title || "本機對話").trim() || "本機對話",
+          }));
+
+        if (!localSessions.length) {
+          localStorage.removeItem(storageKey);
+          return;
+        }
+
+        const histories = {};
+        localSessions.forEach((session) => {
+          const sid = session.id;
+          const rows = sid === petCurrentSessionId ? petHistory : petLocalSessionHistories[sid];
+          if (!Array.isArray(rows)) {
+            histories[sid] = [];
+            return;
+          }
+          histories[sid] = rows
+            .slice(-300)
+            .map((row) => ({
+              role: row?.role === "user" ? "user" : "assistant",
+              content: String(row?.content || "").trim(),
+            }))
+            .filter((row) => row.content);
+        });
+
+        const currentSessionId = localSessions.some((item) => item.id === petCurrentSessionId)
+          ? petCurrentSessionId
+          : localSessions[0].id;
+
+        const payload = {
+          version: 1,
+          currentSessionId,
+          sessions: localSessions,
+          histories,
+          savedAt: Date.now(),
+        };
+        localStorage.setItem(storageKey, JSON.stringify(payload));
+      } catch (err) {
+        console.warn("[pet] persist local sessions failed:", err);
+      }
+    }
+
+    function petRestoreLocalState(force = false) {
+      const storageKey = petGetLocalStorageKey();
+      if (!force && petLocalLoadedStorageKey === storageKey) {
+        return false;
+      }
+
+      petLocalLoadedStorageKey = storageKey;
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) {
+          return false;
+        }
+        const parsed = JSON.parse(raw);
+        const sessions = Array.isArray(parsed?.sessions)
+          ? parsed.sessions
+              .map((item) => ({
+                id: String(item?.id || "").trim(),
+                title: String(item?.title || "本機對話").trim() || "本機對話",
+              }))
+              .filter((item) => item.id && item.id.startsWith("local-"))
+          : [];
+        if (!sessions.length) {
+          return false;
+        }
+
+        const historiesRaw = (parsed && typeof parsed === "object" && parsed.histories && typeof parsed.histories === "object")
+          ? parsed.histories
+          : {};
+        const restoredHistories = {};
+        sessions.forEach((session) => {
+          const rows = historiesRaw[session.id];
+          restoredHistories[session.id] = Array.isArray(rows)
+            ? rows
+                .slice(-300)
+                .map((row) => ({
+                  role: row?.role === "user" ? "user" : "assistant",
+                  content: String(row?.content || "").trim(),
+                }))
+                .filter((row) => row.content)
+            : [];
+        });
+
+        petSessions = sessions;
+        petLocalSessionHistories = restoredHistories;
+
+        const restoredCurrentId = String(parsed?.currentSessionId || "").trim();
+        petCurrentSessionId = sessions.some((item) => item.id === restoredCurrentId)
+          ? restoredCurrentId
+          : sessions[0].id;
+        petHistory = Array.isArray(petLocalSessionHistories[petCurrentSessionId])
+          ? petLocalSessionHistories[petCurrentSessionId].slice()
+          : [];
+        return true;
+      } catch (err) {
+        console.warn("[pet] restore local sessions failed:", err);
+        return false;
+      }
+    }
+
     function petSaveCurrentLocalHistory() {
-      if (petCurrentSessionId) {
+      if (petCurrentSessionId && petCurrentSessionId.startsWith("local-")) {
         petLocalSessionHistories[petCurrentSessionId] = petHistory.slice(-300);
+        petPersistLocalState();
       }
     }
 
@@ -2859,13 +2978,11 @@
       petHistory = [];
       petRenderSessionOptions();
       petRenderMessagesFromHistory();
+      petPersistLocalState();
     }
 
     function petDeleteCurrentLocalSession() {
       if (!petCurrentSessionId) {
-        return;
-      }
-      if (!window.confirm("確定要刪除這個本機聊天室嗎？")) {
         return;
       }
       const targetId = petCurrentSessionId;
@@ -2879,6 +2996,7 @@
       petLoadLocalHistory(petCurrentSessionId);
       petRenderSessionOptions();
       petRenderMessagesFromHistory();
+      petPersistLocalState();
     }
 
     function petRenderSessionOptions() {
@@ -2928,6 +3046,10 @@
       if (forceReset) {
         petSessions = [];
         petCurrentSessionId = "";
+        petHistory = [];
+      }
+      if (!petSessions.length) {
+        petRestoreLocalState(true);
       }
       if (!petSessions.length) {
         petSessions = [{ id: "local-1", title: "本機對話" }];
@@ -2944,6 +3066,7 @@
       petRenderMessagesFromHistory();
       petSetSessionControlsEnabled(false);
       petSessionsLoadedUserKey = "";
+      petPersistLocalState();
     }
 
     async function petApi(path, init = {}) {
@@ -2970,6 +3093,7 @@
       if (!res.ok) {
         if (res.status >= 500) {
           petCloudHealthy = false;
+          petEnsureLocalSession(true);
         }
         const msg = data.error || `HTTP ${res.status}`;
         throw new Error(msg);
@@ -3090,6 +3214,8 @@
       petSessions = [];
       petCurrentSessionId = "";
       petHistory = [];
+      petLocalSessionHistories = {};
+      petLocalLoadedStorageKey = "";
       petEnsureSessionReady(true);
     }
 
@@ -3251,6 +3377,7 @@
           // 雲端失敗，保持本地訊息
         }
       }
+      petPersistLocalState();
     });
 
     petSessionNewBtn.addEventListener("click", async () => {
