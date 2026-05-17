@@ -1168,7 +1168,7 @@
     <div class="pet-header">
       <div>
         <div class="pet-title">陰晴 🌿</div>
-        <div class="pet-subtitle">陪伴夥伴・非心理諮商</div>
+        <div class="pet-subtitle">勇氣同理教練模式・非心理諮商</div>
       </div>
       <button id="pet-close" class="pet-close" aria-label="關閉">✕</button>
     </div>
@@ -2754,6 +2754,8 @@
 
     // 當次情緒上下文，掃描完成後由主流程更新
     let petCurrentEmotion = "unknown";
+    // 預設人格：勇氣同理教練（同理 + 小步行動）
+    const petPersona = "courage_coach";
     // 對話歷史：[{ role, content }, ...]，最多保留 10 輪
     const petHistory = [];
     let petWaiting = false;
@@ -2766,7 +2768,7 @@
       petPanel.classList.add("open");
       petInput.focus();
       if (petMessages.children.length === 0) {
-        petAppend("pet", "嗨，我在這裡 🌿 有什麼想說的嗎？");
+        petAppend("pet", "嗨，我在這裡。你可以先說現在最卡的一件事，我會陪你拆成可行下一步。");
       }
     }
 
@@ -2816,6 +2818,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             emotion: petCurrentEmotion,
+            persona: petPersona,
             messages: petHistory,
           }),
           signal: ctrl.signal,
