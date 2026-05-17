@@ -960,7 +960,8 @@ def chat_sessions_list():
         },
     )
     if status != 200:
-        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+        print(f"[CHAT] chat_sessions GET failed: HTTP {status}, body={data}")
+        return jsonify({"error": "supabase_query_failed", "details": data, "http_status": status}), 502
 
     rows = data if isinstance(data, list) else []
     return jsonify({"ok": True, "sessions": rows})
