@@ -1415,10 +1415,12 @@
           const byTrack = MUSIC_CATEGORY_BY_TRACK_ID[trackId];
           if (byTrack) {
             song.category = byTrack;
+            song.category_source = "track";
             return;
           }
           if (!song.category) {
-            song.category = MUSIC_CATEGORY_BY_EMOTION[emotion] || "未分類";
+            song.category = "未分類（待補）";
+            song.category_source = "unmapped";
           }
         });
       });
@@ -1488,15 +1490,38 @@
       return `${title} (${range})`;
     }
 
-    function resolveSongCategory(song, fallbackEmotion = "unknown") {
+    function resolveSongCategoryMeta(song, fallbackEmotion = "unknown") {
       const trackId = String(song?.id || "").trim();
       if (trackId && MUSIC_CATEGORY_BY_TRACK_ID[trackId]) {
-        return MUSIC_CATEGORY_BY_TRACK_ID[trackId];
+        return {
+          category: MUSIC_CATEGORY_BY_TRACK_ID[trackId],
+          source: "track",
+        };
       }
       if (song && song.category && String(song.category).trim()) {
-        return String(song.category).trim();
+        const category = String(song.category).trim();
+        const source = String(song.category_source || "stored").trim() || "stored";
+        return { category, source };
       }
-      return MUSIC_CATEGORY_BY_EMOTION[fallbackEmotion] || "未分類";
+      return {
+        category: "未分類（待補）",
+        source: "unmapped",
+      };
+    }
+
+    function resolveSongCategory(song, fallbackEmotion = "unknown") {
+      return resolveSongCategoryMeta(song, fallbackEmotion).category;
+    }
+
+    function resolveSongCategorySourceText(song, fallbackEmotion = "unknown") {
+      const source = resolveSongCategoryMeta(song, fallbackEmotion).source;
+      if (source === "track") {
+        return "來源：歌曲 ID";
+      }
+      if (source === "stored") {
+        return "來源：歷史資料";
+      }
+      return "來源：待補齊";
     }
 
     function computeAnalytics(entries) {
@@ -1756,6 +1781,7 @@
       musicGrid.innerHTML = "";
       selected.forEach((item) => {
         const category = resolveSongCategory(item, emotion);
+        const categorySourceText = resolveSongCategorySourceText(item, emotion);
         const embedPath = `https://open.spotify.com/embed/${item.type}/${item.id}?utm_source=generator&theme=0`;
         const openPath = `https://open.spotify.com/${item.type}/${item.id}`;
         const article = document.createElement("article");
@@ -1771,6 +1797,7 @@
             <div class="music-meta">
               <span class="music-name" title="${item.title}">${item.title}</span>
               <span class="music-category" title="${category}">類型：${category}</span>
+              <span class="music-category" title="${categorySourceText}">${categorySourceText}</span>
             </div>
             <a class="music-open" href="${openPath}" data-category="${category}" target="_blank" rel="noopener">開啟</a>
           </div>
@@ -1787,6 +1814,7 @@
       return selected.map((song) => ({
         ...song,
         category: resolveSongCategory(song, emotion),
+        category_source: resolveSongCategoryMeta(song, emotion).source,
       }));
     }
 
@@ -2500,7 +2528,8 @@
           title: song.title,
           type: song.type,
           id: song.id,
-          category: song.category || MUSIC_CATEGORY_BY_EMOTION[resolvedEmotion] || "未分類",
+          category: resolveSongCategory(song, resolvedEmotion),
+          category_source: resolveSongCategoryMeta(song, resolvedEmotion).source,
         })),
       });
       syncMoodDiaryToCloud(false);
