@@ -946,10 +946,6 @@
       font-size: 12px;
       outline: none;
     }
-    .pet-session-select:disabled {
-      opacity: 0.7;
-      cursor: not-allowed;
-    }
     .pet-session-btn {
       min-width: 36px;
       height: 32px;
@@ -961,8 +957,7 @@
       cursor: pointer;
     }
     .pet-session-btn:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
+      opacity: 0.65;
     }
 
     .pet-messages {
@@ -1212,8 +1207,8 @@
     </div>
     <div class="pet-session-row">
       <select id="pet-session-select" class="pet-session-select" aria-label="聊天室清單"></select>
-      <button id="pet-session-new" class="pet-session-btn" type="button" aria-label="新增聊天室">+</button>
-      <button id="pet-session-delete" class="pet-session-btn" type="button" aria-label="刪除聊天室">-</button>
+      <button id="pet-session-new" class="pet-session-btn" type="button" aria-label="新增聊天室">新</button>
+      <button id="pet-session-delete" class="pet-session-btn" type="button" aria-label="刪除聊天室">刪</button>
     </div>
     <div id="pet-messages" class="pet-messages"></div>
     <div class="pet-input-row">
@@ -2813,6 +2808,7 @@
     let petSessions = [];
     let petCurrentSessionId = "";
     let petSessionsLoadedUserKey = "";
+    let petLocalSessionHistories = {};
     let petWaiting = false;
 
     function petSetDnd(on) {
@@ -2828,9 +2824,56 @@
     }
 
     function petSetSessionControlsEnabled(enabled) {
-      petSessionSelect.disabled = !enabled;
-      petSessionNewBtn.disabled = !enabled;
-      petSessionDeleteBtn.disabled = !enabled;
+      // 保持可互動，避免瀏覽器出現「禁止」游標；未登入時由點擊提示處理。
+      petSessionSelect.disabled = false;
+      petSessionNewBtn.disabled = false;
+      petSessionDeleteBtn.disabled = false;
+      petSessionNewBtn.title = enabled ? "新增雲端聊天室" : "新增本機聊天室";
+      petSessionDeleteBtn.title = enabled ? "刪除雲端聊天室" : "刪除本機聊天室";
+    }
+
+    function petSaveCurrentLocalHistory() {
+      if (!petHasCloudSession() && petCurrentSessionId) {
+        petLocalSessionHistories[petCurrentSessionId] = petHistory.slice(-300);
+      }
+    }
+
+    function petLoadLocalHistory(sessionId) {
+      const rows = petLocalSessionHistories[sessionId];
+      petHistory = Array.isArray(rows) ? rows.slice() : [];
+    }
+
+    function petCreateLocalSession(titleText = "") {
+      const nowTag = String(Date.now()).slice(-6);
+      const id = `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const title = (String(titleText || "").trim() || `本機對話 ${nowTag}`).slice(0, 40);
+      const session = { id, title };
+      petSessions.unshift(session);
+      petLocalSessionHistories[id] = [];
+      petCurrentSessionId = id;
+      petHistory = [];
+      petRenderSessionOptions();
+      petRenderMessagesFromHistory();
+    }
+
+    function petDeleteCurrentLocalSession() {
+      if (!petCurrentSessionId) {
+        return;
+      }
+      if (!window.confirm("確定要刪除這個本機聊天室嗎？")) {
+        return;
+      }
+      const targetId = petCurrentSessionId;
+      petSessions = petSessions.filter((item) => item.id !== targetId);
+      delete petLocalSessionHistories[targetId];
+      if (!petSessions.length) {
+        petCreateLocalSession("本機對話");
+        return;
+      }
+      petCurrentSessionId = petSessions[0].id;
+      petLoadLocalHistory(petCurrentSessionId);
+      petRenderSessionOptions();
+      petRenderMessagesFromHistory();
     }
 
     function petRenderSessionOptions() {
@@ -2873,9 +2916,17 @@
     }
 
     function petEnsureLocalSession() {
-      petSessions = [{ id: "local-temporary", title: "本機暫存對話" }];
-      petCurrentSessionId = "local-temporary";
-      petHistory = [];
+      if (!petSessions.length) {
+        petSessions = [{ id: "local-1", title: "本機對話" }];
+        petCurrentSessionId = "local-1";
+        if (!Array.isArray(petLocalSessionHistories[petCurrentSessionId])) {
+          petLocalSessionHistories[petCurrentSessionId] = [];
+        }
+      }
+      if (!petCurrentSessionId || !petSessions.some((item) => item.id === petCurrentSessionId)) {
+        petCurrentSessionId = petSessions[0].id;
+      }
+      petLoadLocalHistory(petCurrentSessionId);
       petRenderSessionOptions();
       petRenderMessagesFromHistory();
       petSetSessionControlsEnabled(false);
@@ -2972,7 +3023,7 @@
 
     async function petEnsureSessionReady(forceReload = false) {
       if (!petHasCloudSession()) {
-        if (!petSessions.length || petCurrentSessionId !== "local-temporary") {
+        if (!petSessions.length) {
           petEnsureLocalSession();
         }
         return;
@@ -3081,6 +3132,10 @@
 
       petAppend("user", userText);
       petHistory.push({ role: "user", content: userText });
+      if (petHistory.length > 300) {
+        petHistory.splice(0, petHistory.length - 300);
+      }
+      petSaveCurrentLocalHistory();
       if (petHasCloudSession() && petCurrentSessionId) {
         petSaveCloudMessage("user", userText).catch((err) => {
           console.warn("[pet] save user message failed:", err);
@@ -3120,6 +3175,10 @@
       loadingBubble.remove();
       petAppend("pet", reply);
       petHistory.push({ role: "assistant", content: reply });
+      if (petHistory.length > 300) {
+        petHistory.splice(0, petHistory.length - 300);
+      }
+      petSaveCurrentLocalHistory();
       if (petHasCloudSession() && petCurrentSessionId) {
         petSaveCloudMessage("assistant", reply).catch((err) => {
           console.warn("[pet] save assistant message failed:", err);
@@ -3157,13 +3216,24 @@
       if (!nextId || nextId === petCurrentSessionId) {
         return;
       }
+      petSaveCurrentLocalHistory();
       petCurrentSessionId = nextId;
-      await petLoadCloudMessages(petCurrentSessionId);
+      if (petHasCloudSession()) {
+        await petLoadCloudMessages(petCurrentSessionId);
+      } else {
+        petLoadLocalHistory(petCurrentSessionId);
+        petRenderMessagesFromHistory();
+      }
     });
 
     petSessionNewBtn.addEventListener("click", async () => {
       if (!petHasCloudSession()) {
-        alert("請先登入，才能建立可保存的聊天室。\n目前未登入模式只提供暫存對話。");
+        const title = window.prompt("請輸入本機聊天室名稱", "本機對話");
+        if (title === null) {
+          return;
+        }
+        petSaveCurrentLocalHistory();
+        petCreateLocalSession(title);
         return;
       }
       const title = window.prompt("請輸入聊天室名稱", "新的對話");
@@ -3184,7 +3254,7 @@
 
     petSessionDeleteBtn.addEventListener("click", async () => {
       if (!petHasCloudSession()) {
-        alert("未登入模式無法刪除雲端聊天室。請先登入。");
+        petDeleteCurrentLocalSession();
         return;
       }
       try {
