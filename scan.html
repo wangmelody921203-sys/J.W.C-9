@@ -2830,6 +2830,10 @@
     }
 
     function petCanUseCloud() {
+      return petHasCloudSession();
+    }
+
+    function petCanUseBackend() {
       return petHasCloudSession() && petCloudHealthy;
     }
 
@@ -3014,7 +3018,7 @@
         const empty = document.createElement("option");
         empty.value = "";
         if (petHasCloudSession() && !petCloudHealthy) {
-          empty.textContent = "雲端暫時不可用（已切本機）";
+          empty.textContent = "後端暫時不可用（已改直連同步）";
         } else {
           empty.textContent = petHasCloudSession() ? "尚無聊天室" : "未登入（暫不保存）";
         }
@@ -3082,8 +3086,8 @@
       if (!petHasCloudSession()) {
         throw new Error("missing_bearer");
       }
-      if (!petCloudHealthy) {
-        throw new Error("cloud_unavailable");
+      if (!petCanUseBackend()) {
+        throw new Error("backend_unavailable");
       }
       const headers = {
         "Authorization": `Bearer ${currentSession.access_token}`,
@@ -3102,12 +3106,123 @@
       if (!res.ok) {
         if (res.status >= 500) {
           petCloudHealthy = false;
-          petEnsureLocalSession(true);
         }
         const msg = data.error || `HTTP ${res.status}`;
         throw new Error(msg);
       }
       return data;
+    }
+
+    async function petSupabaseListSessions(limit = 60, offset = 0) {
+      if (!supabaseClient || !petHasCloudSession()) {
+        throw new Error("supabase_not_ready");
+      }
+      const userId = petGetUserKey();
+      const { data, error } = await supabaseClient
+        .from("chat_sessions")
+        .select("id,title,persona,created_at,updated_at,last_message_at")
+        .eq("user_id", userId)
+        .order("updated_at", { ascending: false })
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(offset, offset + Math.max(1, limit) - 1);
+      if (error) {
+        throw error;
+      }
+      return Array.isArray(data) ? data : [];
+    }
+
+    async function petSupabaseCreateSession(titleText = "新的對話") {
+      if (!supabaseClient || !petHasCloudSession()) {
+        throw new Error("supabase_not_ready");
+      }
+      const nowIso = new Date().toISOString();
+      const userId = petGetUserKey();
+      const payload = {
+        user_id: userId,
+        title: String(titleText || "新的對話").trim() || "新的對話",
+        persona: petPersona,
+        created_at: nowIso,
+        updated_at: nowIso,
+        last_message_at: nowIso,
+      };
+      const { data, error } = await supabaseClient
+        .from("chat_sessions")
+        .insert(payload)
+        .select("id,title,persona,created_at,updated_at,last_message_at")
+        .single();
+      if (error) {
+        throw error;
+      }
+      return data || null;
+    }
+
+    async function petSupabaseListMessages(sessionId) {
+      if (!supabaseClient || !petHasCloudSession()) {
+        throw new Error("supabase_not_ready");
+      }
+      const userId = petGetUserKey();
+      const { data, error } = await supabaseClient
+        .from("chat_messages")
+        .select("role,content,created_at,id")
+        .eq("user_id", userId)
+        .eq("session_id", sessionId)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .limit(300);
+      if (error) {
+        throw error;
+      }
+      return Array.isArray(data) ? data : [];
+    }
+
+    async function petSupabaseSaveMessage(role, content) {
+      if (!supabaseClient || !petHasCloudSession() || !petCurrentSessionId) {
+        throw new Error("supabase_not_ready");
+      }
+      const userId = petGetUserKey();
+      const nowIso = new Date().toISOString();
+      const { error } = await supabaseClient
+        .from("chat_messages")
+        .insert({
+          user_id: userId,
+          session_id: petCurrentSessionId,
+          role,
+          content,
+          emotion: petCurrentEmotion,
+          created_at: nowIso,
+        });
+      if (error) {
+        throw error;
+      }
+      await supabaseClient
+        .from("chat_sessions")
+        .update({
+          updated_at: nowIso,
+          last_message_at: nowIso,
+        })
+        .eq("user_id", userId)
+        .eq("id", petCurrentSessionId);
+    }
+
+    async function petSupabaseDeleteSession(sessionId) {
+      if (!supabaseClient || !petHasCloudSession()) {
+        throw new Error("supabase_not_ready");
+      }
+      const userId = petGetUserKey();
+      await supabaseClient
+        .from("chat_messages")
+        .delete()
+        .eq("user_id", userId)
+        .eq("session_id", sessionId);
+      const { error } = await supabaseClient
+        .from("chat_sessions")
+        .delete()
+        .eq("user_id", userId)
+        .eq("id", sessionId);
+      if (error) {
+        throw error;
+      }
     }
 
     async function petLoadCloudMessages(sessionId) {
@@ -3117,8 +3232,13 @@
         return;
       }
       try {
-        const data = await petApi(`/chat/messages?session_id=${encodeURIComponent(sessionId)}&limit=300`);
-        const rows = Array.isArray(data.messages) ? data.messages : [];
+        let rows = [];
+        try {
+          const data = await petApi(`/chat/messages?session_id=${encodeURIComponent(sessionId)}&limit=300`);
+          rows = Array.isArray(data.messages) ? data.messages : [];
+        } catch (backendErr) {
+          rows = await petSupabaseListMessages(sessionId);
+        }
         petHistory = rows
           .map((row) => ({
             role: row.role === "user" ? "user" : "assistant",
@@ -3137,11 +3257,15 @@
         title: String(titleText || "新的對話").trim() || "新的對話",
         persona: petPersona,
       };
-      const data = await petApi("/chat/sessions", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      return data.session || null;
+      try {
+        const data = await petApi("/chat/sessions", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        return data.session || null;
+      } catch (_) {
+        return await petSupabaseCreateSession(payload.title);
+      }
     }
 
     async function petLoadCloudSessions(force = false) {
@@ -3155,8 +3279,13 @@
         return;
       }
 
-      const data = await petApi("/chat/sessions?limit=60&offset=0");
-      let rows = Array.isArray(data.sessions) ? data.sessions : [];
+      let rows = [];
+      try {
+        const data = await petApi("/chat/sessions?limit=60&offset=0");
+        rows = Array.isArray(data.sessions) ? data.sessions : [];
+      } catch (_) {
+        rows = await petSupabaseListSessions(60, 0);
+      }
 
       if (!rows.length) {
         const created = await petCreateCloudSession("新的對話");
@@ -3184,7 +3313,6 @@
         await petLoadCloudSessions(forceReload);
       } catch (err) {
         console.warn("[pet] load sessions failed:", err);
-        petCloudHealthy = false;
         petEnsureLocalSession(true);
       }
     }
@@ -3193,15 +3321,19 @@
       if (!petCanUseCloud() || !petCurrentSessionId) {
         return;
       }
-      await petApi("/chat/messages", {
-        method: "POST",
-        body: JSON.stringify({
-          session_id: petCurrentSessionId,
-          role,
-          content,
-          emotion: petCurrentEmotion,
-        }),
-      });
+      try {
+        await petApi("/chat/messages", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: petCurrentSessionId,
+            role,
+            content,
+            emotion: petCurrentEmotion,
+          }),
+        });
+      } catch (_) {
+        await petSupabaseSaveMessage(role, content);
+      }
     }
 
     async function petDeleteCurrentCloudSession() {
@@ -3211,9 +3343,13 @@
       if (!window.confirm("確定要刪除這個聊天室嗎？刪除後無法復原。")) {
         return;
       }
-      await petApi(`/chat/sessions/${encodeURIComponent(petCurrentSessionId)}`, {
-        method: "DELETE",
-      });
+      try {
+        await petApi(`/chat/sessions/${encodeURIComponent(petCurrentSessionId)}`, {
+          method: "DELETE",
+        });
+      } catch (_) {
+        await petSupabaseDeleteSession(petCurrentSessionId);
+      }
       await petLoadCloudSessions(true);
     }
 
