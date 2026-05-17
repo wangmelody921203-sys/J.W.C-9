@@ -762,10 +762,35 @@
       padding: 12px 14px;
     }
 
+    .music-meta {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
     .music-name {
       font-size: 13px;
       font-weight: 700;
       color: #f8fbff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .music-category {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      max-width: 100%;
+      font-size: 11px;
+      color: #bfe8d1;
+      background: rgba(50, 217, 124, 0.12);
+      border: 1px solid rgba(50, 217, 124, 0.25);
+      border-radius: 999px;
+      padding: 2px 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .music-open {
@@ -1413,6 +1438,13 @@
       return `${title} (${range})`;
     }
 
+    function resolveSongCategory(song, fallbackEmotion = "unknown") {
+      if (song && song.category && String(song.category).trim()) {
+        return String(song.category).trim();
+      }
+      return MUSIC_CATEGORY_BY_EMOTION[fallbackEmotion] || "未分類";
+    }
+
     function computeAnalytics(entries) {
       const valid = (entries || []).map((entry) => {
         const date = parseEntryDate(entry);
@@ -1682,7 +1714,10 @@
             loading="lazy"
           ></iframe>
           <div class="music-card-footer">
-            <span class="music-name">${item.title}</span>
+            <div class="music-meta">
+              <span class="music-name" title="${item.title}">${item.title}</span>
+              <span class="music-category" title="${category}">類型：${category}</span>
+            </div>
             <a class="music-open" href="${openPath}" data-category="${category}" target="_blank" rel="noopener">開啟</a>
           </div>
         `;
@@ -1943,7 +1978,18 @@
 
         const songs = Array.isArray(entry.songs) ? entry.songs : [];
         const songText = songs.length
-          ? songs.map((song) => song.title).filter(Boolean).slice(0, 3).join("、")
+          ? songs
+            .map((song) => {
+              const title = String(song?.title || "").trim();
+              if (!title) {
+                return "";
+              }
+              const category = resolveSongCategory(song, entry.emotion || "unknown");
+              return `${title}（${category}）`;
+            })
+            .filter(Boolean)
+            .slice(0, 3)
+            .join("、")
           : "(無歌曲資料)";
         const entryId = String(entry.id || "");
         const deleting = entryId ? diaryDeletingIds.has(entryId) : false;
