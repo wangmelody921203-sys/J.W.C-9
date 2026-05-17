@@ -2809,6 +2809,7 @@
     let petCurrentSessionId = "";
     let petSessionsLoadedUserKey = "";
     let petLocalSessionHistories = {};
+    let petCloudHealthy = true;
     let petWaiting = false;
 
     function petSetDnd(on) {
@@ -2823,6 +2824,10 @@
       return Boolean(currentSession?.access_token && petGetUserKey());
     }
 
+    function petCanUseCloud() {
+      return petHasCloudSession() && petCloudHealthy;
+    }
+
     function petSetSessionControlsEnabled(enabled) {
       // 保持可互動，避免瀏覽器出現「禁止」游標；未登入時由點擊提示處理。
       petSessionSelect.disabled = false;
@@ -2833,7 +2838,7 @@
     }
 
     function petSaveCurrentLocalHistory() {
-      if (!petHasCloudSession() && petCurrentSessionId) {
+      if (petCurrentSessionId) {
         petLocalSessionHistories[petCurrentSessionId] = petHistory.slice(-300);
       }
     }
@@ -2881,7 +2886,11 @@
       if (!petSessions.length) {
         const empty = document.createElement("option");
         empty.value = "";
-        empty.textContent = petHasCloudSession() ? "尚無聊天室" : "未登入（暫不保存）";
+        if (petHasCloudSession() && !petCloudHealthy) {
+          empty.textContent = "雲端暫時不可用（已切本機）";
+        } else {
+          empty.textContent = petHasCloudSession() ? "尚無聊天室" : "未登入（暫不保存）";
+        }
         petSessionSelect.appendChild(empty);
         petSetSessionControlsEnabled(false);
         return;
@@ -2898,7 +2907,7 @@
         petCurrentSessionId = petSessions[0].id;
       }
       petSessionSelect.value = petCurrentSessionId;
-      petSetSessionControlsEnabled(petHasCloudSession());
+      petSetSessionControlsEnabled(petCanUseCloud());
     }
 
     function petRenderMessagesFromHistory() {
@@ -2915,7 +2924,11 @@
       });
     }
 
-    function petEnsureLocalSession() {
+    function petEnsureLocalSession(forceReset = false) {
+      if (forceReset) {
+        petSessions = [];
+        petCurrentSessionId = "";
+      }
       if (!petSessions.length) {
         petSessions = [{ id: "local-1", title: "本機對話" }];
         petCurrentSessionId = "local-1";
@@ -2934,8 +2947,11 @@
     }
 
     async function petApi(path, init = {}) {
-      if (!currentSession?.access_token) {
+      if (!petHasCloudSession()) {
         throw new Error("missing_bearer");
+      }
+      if (!petCloudHealthy) {
+        throw new Error("cloud_unavailable");
       }
       const headers = {
         "Authorization": `Bearer ${currentSession.access_token}`,
@@ -2952,6 +2968,9 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (res.status >= 500) {
+          petCloudHealthy = false;
+        }
         const msg = data.error || `HTTP ${res.status}`;
         throw new Error(msg);
       }
@@ -2993,7 +3012,7 @@
     }
 
     async function petLoadCloudSessions(force = false) {
-      if (!petHasCloudSession()) {
+      if (!petCanUseCloud()) {
         petEnsureLocalSession();
         return;
       }
@@ -3022,7 +3041,7 @@
     }
 
     async function petEnsureSessionReady(forceReload = false) {
-      if (!petHasCloudSession()) {
+      if (!petCanUseCloud()) {
         if (!petSessions.length) {
           petEnsureLocalSession();
         }
@@ -3032,12 +3051,13 @@
         await petLoadCloudSessions(forceReload);
       } catch (err) {
         console.warn("[pet] load sessions failed:", err);
-        petEnsureLocalSession();
+        petCloudHealthy = false;
+        petEnsureLocalSession(true);
       }
     }
 
     async function petSaveCloudMessage(role, content) {
-      if (!petHasCloudSession() || !petCurrentSessionId) {
+      if (!petCanUseCloud() || !petCurrentSessionId) {
         return;
       }
       await petApi("/chat/messages", {
@@ -3052,7 +3072,7 @@
     }
 
     async function petDeleteCurrentCloudSession() {
-      if (!petHasCloudSession() || !petCurrentSessionId) {
+      if (!petCanUseCloud() || !petCurrentSessionId) {
         return;
       }
       if (!window.confirm("確定要刪除這個聊天室嗎？刪除後無法復原。")) {
@@ -3065,6 +3085,7 @@
     }
 
     function petHandleAuthStateChange() {
+      petCloudHealthy = true;
       petSessionsLoadedUserKey = "";
       petSessions = [];
       petCurrentSessionId = "";
@@ -3136,7 +3157,7 @@
         petHistory.splice(0, petHistory.length - 300);
       }
       petSaveCurrentLocalHistory();
-      if (petHasCloudSession() && petCurrentSessionId) {
+      if (petCanUseCloud() && petCurrentSessionId && !petCurrentSessionId.startsWith("local-")) {
         petSaveCloudMessage("user", userText).catch((err) => {
           console.warn("[pet] save user message failed:", err);
         });
@@ -3179,7 +3200,7 @@
         petHistory.splice(0, petHistory.length - 300);
       }
       petSaveCurrentLocalHistory();
-      if (petHasCloudSession() && petCurrentSessionId) {
+      if (petCanUseCloud() && petCurrentSessionId && !petCurrentSessionId.startsWith("local-")) {
         petSaveCloudMessage("assistant", reply).catch((err) => {
           console.warn("[pet] save assistant message failed:", err);
         });
@@ -3222,7 +3243,7 @@
       petLoadLocalHistory(petCurrentSessionId);
       petRenderMessagesFromHistory();
       // 若登入且是雲端會話 ID，嘗試載入雲端訊息（覆蓋本地）
-      if (petHasCloudSession() && !nextId.startsWith("local-")) {
+      if (petCanUseCloud() && !nextId.startsWith("local-")) {
         try {
           await petLoadCloudMessages(nextId);
         } catch (err) {
@@ -3241,7 +3262,7 @@
       // 先建立本地會話（立即可用）
       petCreateLocalSession(title);
       // 若登入且雲端可用，嘗試同步（背景進行，不阻擋 UI）
-      if (petHasCloudSession()) {
+      if (petCanUseCloud()) {
         try {
           const created = await petCreateCloudSession(title);
           if (created && created.id) {
@@ -3263,7 +3284,7 @@
       // 先刪除本地會話（立即可用）
       petDeleteCurrentLocalSession();
       // 若登入且雲端可用，嘗試同步刪除（背景進行，不阻擋 UI）
-      if (petHasCloudSession()) {
+      if (petCanUseCloud()) {
         try {
           await petDeleteCurrentCloudSession();
         } catch (err) {
