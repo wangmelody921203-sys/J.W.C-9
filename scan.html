@@ -2795,6 +2795,23 @@
       return div;
     }
 
+    function petBuildFallback(emotion) {
+      const byEmotion = {
+        sadness: "聽起來你現在真的很難受，謝謝你願意告訴我。",
+        anger: "你會這麼氣和委屈很可以理解，我有在聽。",
+        fear: "你現在的不安很真實，你不用一個人撐住。",
+        disgust: "那種很卡、很不舒服的感覺，我有接住。",
+        contempt: "那份失望和疏離感，我聽見了。",
+        uncertain: "現在還說不清楚也沒關係，我們可以慢慢來。",
+        neutral: "謝謝你願意繼續說，我在這裡。",
+        no_face: "我可能暫時沒抓到你的狀態，但我還是在這裡陪你。",
+        unknown: "謝謝你願意說，我在這裡好好聽你。",
+      };
+      const first = byEmotion[emotion] || byEmotion.unknown;
+      const second = "如果你願意，我可以先陪你從剛剛最難受的一幕開始整理。";
+      return `${first}\n\n${second}`;
+    }
+
     async function petSend(userText) {
       userText = userText.trim();
       if (!userText || petWaiting) return;
@@ -2811,7 +2828,7 @@
       petSendBtn.disabled = true;
       const loadingBubble = petAppend("loading", "陰晴正在思考…");
 
-      let reply = "我聽到了，你不需要一個人扛著。";
+      let reply = petBuildFallback(petCurrentEmotion);
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 5000);

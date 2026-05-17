@@ -143,6 +143,28 @@ def _format_reply_for_readability(text: str) -> str:
             blocks.append(block)
     return "\n\n".join(blocks) if blocks else normalized
 
+
+def _build_fallback_reply(emotion: str, persona: str) -> str:
+    by_emotion = {
+        "sadness": "聽起來你真的很難受，謝謝你願意把這份心情說出來。",
+        "anger": "你現在的火大與委屈，我有聽見，這真的不容易。",
+        "fear": "你會緊張和不安很可以理解，你不是在小題大作。",
+        "disgust": "那種卡住又反感的感覺很消耗，你辛苦了。",
+        "contempt": "你心裡那種失望與疏離感，我有接住。",
+        "uncertain": "現在說不清楚也沒關係，你已經很努力在整理了。",
+        "neutral": "謝謝你願意繼續跟我說，我在這裡陪你。",
+        "no_face": "我可能暫時沒抓到你的狀態，但我還是在這裡陪你。",
+        "unknown": "謝謝你願意說，我在這裡好好聽你。",
+    }
+    first = by_emotion.get(emotion, by_emotion["unknown"])
+    if persona == "courage_coach":
+        second = "如果你願意，我可以先陪你整理剛剛最刺痛的一幕，慢慢來就好。"
+    elif persona == "companion":
+        second = "你不用急著整理好，我會陪著你。"
+    else:
+        second = "如果你想，我們可以先從現在最卡的一點開始。"
+    return f"{first}\n\n{second}"
+
 _PERSONA_PROMPTS: dict[str, str] = {
     "assistant": """\
 你是「陰晴」AI 助手，目標是幫使用者把問題釐清並給出可執行下一步。
@@ -736,10 +758,6 @@ def generate():
     if not _check_rate(ip):
         return jsonify({"error": "rate_limit", "fallback": "我需要稍微休息一下，等等再來找我吧 🌙"}), 429
 
-    client = _get_groq_client()
-    if client is None:
-        return jsonify({"error": "groq_unavailable", "fallback": "我現在說不出話來，但我一直在這裡陪著你。"}), 503
-
     payload = request.get_json(silent=True) or {}
 
     # 驗證 emotion（白名單，防注入）
@@ -749,6 +767,11 @@ def generate():
 
     # 驗證 persona（白名單，避免任意 prompt 注入）
     persona = _resolve_persona(payload.get("persona", "assistant"))
+    fallback_reply = _build_fallback_reply(emotion, persona)
+
+    client = _get_groq_client()
+    if client is None:
+        return jsonify({"error": "groq_unavailable", "fallback": fallback_reply}), 503
 
     # 驗證 messages：只取 role/content，限長度
     raw_messages = payload.get("messages", [])
@@ -777,21 +800,31 @@ def generate():
 
     groq_messages = [{"role": "system", "content": system_with_context}] + clean_messages
 
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=groq_messages,
-            max_tokens=220,       # 提高上限，避免回覆半句被截斷
-            temperature=0.7,
-            timeout=8.0,          # 放寬超時，降低截斷率
-        )
-        reply = _format_reply_for_readability(completion.choices[0].message.content)
-    except Exception:
-        app.logger.exception("Groq generate failed")
-        return jsonify({"error": "groq_error", "fallback": "我聽到了，你不需要一個人扛著。"}), 500
+    reply = ""
+    last_error = None
+    for attempt in range(2):
+        try:
+            completion = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=groq_messages,
+                max_tokens=220,       # 提高上限，避免回覆半句被截斷
+                temperature=0.7,
+                timeout=8.0,          # 放寬超時，降低截斷率
+            )
+            reply = _format_reply_for_readability(completion.choices[0].message.content)
+            if reply:
+                break
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0:
+                continue
+
+    if not reply and last_error is not None:
+        app.logger.exception("Groq generate failed", exc_info=last_error)
+        return jsonify({"error": "groq_error", "fallback": fallback_reply}), 500
 
     if not reply:
-        reply = "我聽到了，你不需要一個人扛著。"  # 超時或失敗的固定回退文案
+        reply = fallback_reply
 
     return jsonify({"reply": reply, "emotion": emotion, "persona": persona})
 
