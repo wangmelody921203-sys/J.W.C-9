@@ -3232,13 +3232,7 @@
         return;
       }
       try {
-        let rows = [];
-        try {
-          const data = await petApi(`/chat/messages?session_id=${encodeURIComponent(sessionId)}&limit=300`);
-          rows = Array.isArray(data.messages) ? data.messages : [];
-        } catch (backendErr) {
-          rows = await petSupabaseListMessages(sessionId);
-        }
+        const rows = await petSupabaseListMessages(sessionId);
         petHistory = rows
           .map((row) => ({
             role: row.role === "user" ? "user" : "assistant",
@@ -3253,19 +3247,9 @@
     }
 
     async function petCreateCloudSession(titleText = "新的對話") {
-      const payload = {
-        title: String(titleText || "新的對話").trim() || "新的對話",
-        persona: petPersona,
-      };
-      try {
-        const data = await petApi("/chat/sessions", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        return data.session || null;
-      } catch (_) {
-        return await petSupabaseCreateSession(payload.title);
-      }
+      return await petSupabaseCreateSession(
+        String(titleText || "新的對話").trim() || "新的對話"
+      );
     }
 
     async function petLoadCloudSessions(force = false) {
@@ -3279,13 +3263,7 @@
         return;
       }
 
-      let rows = [];
-      try {
-        const data = await petApi("/chat/sessions?limit=60&offset=0");
-        rows = Array.isArray(data.sessions) ? data.sessions : [];
-      } catch (_) {
-        rows = await petSupabaseListSessions(60, 0);
-      }
+      let rows = await petSupabaseListSessions(60, 0);
 
       if (!rows.length) {
         const created = await petCreateCloudSession("新的對話");
@@ -3321,19 +3299,7 @@
       if (!petCanUseCloud() || !petCurrentSessionId) {
         return;
       }
-      try {
-        await petApi("/chat/messages", {
-          method: "POST",
-          body: JSON.stringify({
-            session_id: petCurrentSessionId,
-            role,
-            content,
-            emotion: petCurrentEmotion,
-          }),
-        });
-      } catch (_) {
-        await petSupabaseSaveMessage(role, content);
-      }
+      await petSupabaseSaveMessage(role, content);
     }
 
     async function petDeleteCurrentCloudSession() {
@@ -3343,13 +3309,7 @@
       if (!window.confirm("確定要刪除這個聊天室嗎？刪除後無法復原。")) {
         return;
       }
-      try {
-        await petApi(`/chat/sessions/${encodeURIComponent(petCurrentSessionId)}`, {
-          method: "DELETE",
-        });
-      } catch (_) {
-        await petSupabaseDeleteSession(petCurrentSessionId);
-      }
+      await petSupabaseDeleteSession(petCurrentSessionId);
       await petLoadCloudSessions(true);
     }
 
