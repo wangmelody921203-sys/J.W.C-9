@@ -2843,13 +2843,19 @@
     }
 
     function petGetLocalStorageKey() {
-      const userKey = petGetUserKey() || "guest";
+      const userKey = petGetUserKey();
+      if (!userKey) {
+        return "";
+      }
       return `pet-local-chat-v1:${userKey}`;
     }
 
     function petPersistLocalState() {
       try {
         const storageKey = petGetLocalStorageKey();
+        if (!storageKey) {
+          return;
+        }
         const localSessions = petSessions
           .filter((item) => String(item?.id || "").startsWith("local-"))
           .map((item) => ({
@@ -2898,6 +2904,9 @@
 
     function petRestoreLocalState(force = false) {
       const storageKey = petGetLocalStorageKey();
+      if (!storageKey) {
+        return false;
+      }
       if (!force && petLocalLoadedStorageKey === storageKey) {
         return false;
       }
@@ -3216,6 +3225,14 @@
       petHistory = [];
       petLocalSessionHistories = {};
       petLocalLoadedStorageKey = "";
+      if (!petHasCloudSession()) {
+        // 未登入時不保留既有本機對話，避免不同使用者共用到暫存對話。
+        try {
+          localStorage.removeItem("pet-local-chat-v1:guest");
+        } catch (_) {
+          // ignore
+        }
+      }
       petEnsureSessionReady(true);
     }
 
