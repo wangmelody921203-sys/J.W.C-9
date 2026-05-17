@@ -108,6 +108,53 @@
 
 目前 `scan.html` 的桌寵預設採用 `courage_coach`，可先作為「AI 助手人格 MVP」。
 
+### 多聊天室（Gem 風格）
+
+桌寵已支援「多個可保存聊天室」：
+
+- API：`/chat/sessions`、`/chat/sessions/<id>`、`/chat/messages`
+- 前端：可新增、切換、刪除聊天室
+- 儲存位置：Supabase（不使用後端記憶體保存對話）
+
+這樣可避免 Flask 進程記憶體被長對話塞滿，也能跨裝置保留紀錄。
+
+#### 建議 Supabase 資料表（SQL）
+
+```sql
+create table if not exists public.chat_sessions (
+	id uuid primary key default gen_random_uuid(),
+	user_id uuid not null,
+	title text not null default '新的對話',
+	persona text not null default 'courage_coach',
+	created_at timestamptz not null default now(),
+	updated_at timestamptz not null default now(),
+	last_message_at timestamptz not null default now()
+);
+
+create index if not exists chat_sessions_user_updated_idx
+	on public.chat_sessions (user_id, updated_at desc, created_at desc);
+
+create table if not exists public.chat_messages (
+	id uuid primary key default gen_random_uuid(),
+	user_id uuid not null,
+	session_id uuid not null references public.chat_sessions(id) on delete cascade,
+	role text not null check (role in ('user', 'assistant')),
+	content text not null,
+	emotion text not null default 'unknown',
+	created_at timestamptz not null default now()
+);
+
+create index if not exists chat_messages_session_created_idx
+	on public.chat_messages (user_id, session_id, created_at asc, id asc);
+```
+
+#### 容量限制（可透過環境變數調整）
+
+- `CHAT_MAX_SESSIONS_PER_USER`：每位使用者最多保留聊天室數量（預設 60）
+- `CHAT_MAX_MESSAGES_PER_SESSION`：每個聊天室最多保留訊息數量（預設 300）
+
+超出上限時，後端會自動清理最舊資料。
+
 ### 啟用方式
 
 1. 在 Render Dashboard 的環境變數設定 `GROQ_API_KEY=你的金鑰`（金鑰**不可**放入程式碼或 git）。

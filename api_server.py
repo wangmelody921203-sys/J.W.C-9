@@ -221,6 +221,9 @@ FEEDBACK_WEBHOOK_ENV = "FEEDBACK_WEBHOOK_URL"
 SUPABASE_URL_ENV = "SUPABASE_URL"
 SUPABASE_SERVICE_KEY_ENV = "SUPABASE_SERVICE_ROLE_KEY"
 DEFAULT_CLOUD_DIARY_MAX_ENTRIES_PER_USER = 500
+DEFAULT_CHAT_MAX_SESSIONS_PER_USER = 60
+DEFAULT_CHAT_MAX_MESSAGES_PER_SESSION = 300
+CHAT_MESSAGE_LENGTH_LIMIT = 1000
 
 
 def _get_cloud_diary_max_entries_per_user() -> int:
@@ -230,6 +233,226 @@ def _get_cloud_diary_max_entries_per_user() -> int:
     except ValueError:
         return DEFAULT_CLOUD_DIARY_MAX_ENTRIES_PER_USER
     return max(50, value)
+
+
+def _get_chat_max_sessions_per_user() -> int:
+    raw = os.environ.get("CHAT_MAX_SESSIONS_PER_USER", str(DEFAULT_CHAT_MAX_SESSIONS_PER_USER)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_CHAT_MAX_SESSIONS_PER_USER
+    return max(10, value)
+
+
+def _get_chat_max_messages_per_session() -> int:
+    raw = os.environ.get("CHAT_MAX_MESSAGES_PER_SESSION", str(DEFAULT_CHAT_MAX_MESSAGES_PER_SESSION)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_CHAT_MAX_MESSAGES_PER_SESSION
+    return max(50, value)
+
+
+def _utc_now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _normalize_chat_title(raw: str) -> str:
+    title = str(raw or "").strip()
+    if not title:
+        return "新的對話"
+    return title[:80]
+
+
+def _resolve_authed_user() -> tuple[str | None, str | None, str | None]:
+    supabase_url, service_key = _get_supabase_config()
+    if not supabase_url or not service_key:
+        return None, None, None
+
+    token = _extract_bearer_token()
+    if not token:
+        return supabase_url, service_key, None
+
+    user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
+    return supabase_url, service_key, user_id
+
+
+def _chat_get_session(
+    *,
+    supabase_url: str,
+    service_key: str,
+    user_id: str,
+    session_id: str,
+) -> tuple[dict | None, str | None]:
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/chat_sessions",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,title,persona,created_at,updated_at,last_message_at",
+            "id": f"eq.{session_id}",
+            "user_id": f"eq.{user_id}",
+            "limit": "1",
+        },
+    )
+    if status != 200:
+        return None, "supabase_query_failed"
+    rows = data if isinstance(data, list) else []
+    return (rows[0] if rows else None), None
+
+
+def _chat_touch_session(
+    *,
+    supabase_url: str,
+    service_key: str,
+    user_id: str,
+    session_id: str,
+) -> bool:
+    now_iso = _utc_now_iso()
+    status, _ = _supabase_rest_request(
+        method="PATCH",
+        path="/rest/v1/chat_sessions",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "id": f"eq.{session_id}",
+            "user_id": f"eq.{user_id}",
+        },
+        payload={
+            "updated_at": now_iso,
+            "last_message_at": now_iso,
+        },
+        prefer="return=minimal",
+    )
+    return status in (200, 204)
+
+
+def _prune_chat_sessions(
+    *,
+    supabase_url: str,
+    service_key: str,
+    user_id: str,
+    keep_limit: int,
+) -> tuple[int, str | None]:
+    if keep_limit <= 0:
+        return 0, None
+
+    removed_total = 0
+    while True:
+        status, data = _supabase_rest_request(
+            method="GET",
+            path="/rest/v1/chat_sessions",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "select": "id",
+                "user_id": f"eq.{user_id}",
+                "order": "updated_at.desc,created_at.desc,id.desc",
+                "offset": str(keep_limit),
+                "limit": "200",
+            },
+        )
+        if status != 200:
+            return removed_total, "supabase_chat_session_prune_query_failed"
+
+        rows = data if isinstance(data, list) else []
+        if not rows:
+            return removed_total, None
+
+        ids = [str(row.get("id", "")).strip() for row in rows]
+        ids = [value for value in ids if value]
+        if not ids:
+            return removed_total, None
+
+        id_filter = f"in.({','.join(ids)})"
+        del_msg_status, _ = _supabase_rest_request(
+            method="DELETE",
+            path="/rest/v1/chat_messages",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "user_id": f"eq.{user_id}",
+                "session_id": id_filter,
+            },
+            prefer="return=minimal",
+        )
+        if del_msg_status not in (200, 204):
+            return removed_total, "supabase_chat_message_prune_delete_failed"
+
+        del_status, _ = _supabase_rest_request(
+            method="DELETE",
+            path="/rest/v1/chat_sessions",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "user_id": f"eq.{user_id}",
+                "id": id_filter,
+            },
+            prefer="return=minimal",
+        )
+        if del_status not in (200, 204):
+            return removed_total, "supabase_chat_session_prune_delete_failed"
+
+        removed_total += len(ids)
+
+
+def _prune_chat_messages(
+    *,
+    supabase_url: str,
+    service_key: str,
+    user_id: str,
+    session_id: str,
+    keep_limit: int,
+) -> tuple[int, str | None]:
+    if keep_limit <= 0:
+        return 0, None
+
+    removed_total = 0
+    while True:
+        status, data = _supabase_rest_request(
+            method="GET",
+            path="/rest/v1/chat_messages",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "select": "id",
+                "user_id": f"eq.{user_id}",
+                "session_id": f"eq.{session_id}",
+                "order": "created_at.desc,id.desc",
+                "offset": str(keep_limit),
+                "limit": "200",
+            },
+        )
+        if status != 200:
+            return removed_total, "supabase_chat_message_prune_query_failed"
+
+        rows = data if isinstance(data, list) else []
+        if not rows:
+            return removed_total, None
+
+        ids = [str(row.get("id", "")).strip() for row in rows]
+        ids = [value for value in ids if value]
+        if not ids:
+            return removed_total, None
+
+        id_filter = f"in.({','.join(ids)})"
+        del_status, _ = _supabase_rest_request(
+            method="DELETE",
+            path="/rest/v1/chat_messages",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "user_id": f"eq.{user_id}",
+                "session_id": f"eq.{session_id}",
+                "id": id_filter,
+            },
+            prefer="return=minimal",
+        )
+        if del_status not in (200, 204):
+            return removed_total, "supabase_chat_message_prune_delete_failed"
+
+        removed_total += len(ids)
 
 
 def _get_supabase_config() -> tuple[str, str] | tuple[None, None]:
@@ -510,6 +733,9 @@ def index():
                 "/diary/sync",
                 "/diary/list",
                 "/diary/entry/<id>",
+                "/chat/sessions",
+                "/chat/sessions/<id>",
+                "/chat/messages",
             ],
         }
     )
@@ -668,6 +894,289 @@ def diary_delete(entry_id: str):
 
     deleted_count = len(data) if isinstance(data, list) else 0
     return jsonify({"ok": True, "deleted_count": deleted_count})
+
+
+@app.get("/chat/sessions")
+def chat_sessions_list():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    try:
+        limit = max(1, min(100, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/chat_sessions",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,title,persona,created_at,updated_at,last_message_at",
+            "user_id": f"eq.{user_id}",
+            "order": "updated_at.desc,created_at.desc,id.desc",
+            "limit": str(limit),
+            "offset": str(offset),
+        },
+    )
+    if status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    return jsonify({"ok": True, "sessions": rows})
+
+
+@app.post("/chat/sessions")
+def chat_sessions_create():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    title = _normalize_chat_title(payload.get("title", "新的對話"))
+    persona = _resolve_persona(payload.get("persona", "courage_coach"))
+    now_iso = _utc_now_iso()
+
+    status, data = _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/chat_sessions",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        payload={
+            "user_id": user_id,
+            "title": title,
+            "persona": persona,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "last_message_at": now_iso,
+        },
+        prefer="return=representation",
+    )
+    if status not in (200, 201):
+        return jsonify({"error": "supabase_insert_failed", "details": data}), 502
+
+    keep_limit = _get_chat_max_sessions_per_user()
+    _, prune_error = _prune_chat_sessions(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        keep_limit=keep_limit,
+    )
+    if prune_error:
+        return jsonify({"error": prune_error, "details": {"keep_limit": keep_limit}}), 502
+
+    rows = data if isinstance(data, list) else []
+    session = rows[0] if rows else None
+    return jsonify({"ok": True, "session": session}), 201
+
+
+@app.delete("/chat/sessions/<session_id>")
+def chat_sessions_delete(session_id: str):
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    target_id = str(session_id).strip()
+    if not target_id:
+        return jsonify({"error": "invalid_session_id"}), 400
+
+    session_row, lookup_error = _chat_get_session(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        session_id=target_id,
+    )
+    if lookup_error:
+        return jsonify({"error": lookup_error}), 502
+    if not session_row:
+        return jsonify({"error": "session_not_found"}), 404
+
+    del_msg_status, del_msg_data = _supabase_rest_request(
+        method="DELETE",
+        path="/rest/v1/chat_messages",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "user_id": f"eq.{user_id}",
+            "session_id": f"eq.{target_id}",
+        },
+        prefer="return=minimal",
+    )
+    if del_msg_status not in (200, 204):
+        return jsonify({"error": "supabase_delete_failed", "details": del_msg_data}), 502
+
+    del_status, del_data = _supabase_rest_request(
+        method="DELETE",
+        path="/rest/v1/chat_sessions",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "user_id": f"eq.{user_id}",
+            "id": f"eq.{target_id}",
+        },
+        prefer="return=representation",
+    )
+    if del_status not in (200, 204):
+        return jsonify({"error": "supabase_delete_failed", "details": del_data}), 502
+
+    deleted_count = len(del_data) if isinstance(del_data, list) else 0
+    return jsonify({"ok": True, "deleted_count": deleted_count})
+
+
+@app.get("/chat/messages")
+def chat_messages_list():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    session_id = str(request.args.get("session_id", "")).strip()
+    if not session_id:
+        return jsonify({"error": "missing_session_id"}), 400
+
+    session_row, lookup_error = _chat_get_session(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    if lookup_error:
+        return jsonify({"error": lookup_error}), 502
+    if not session_row:
+        return jsonify({"error": "session_not_found"}), 404
+
+    try:
+        limit = max(1, min(500, int(request.args.get("limit", 200))))
+    except (TypeError, ValueError):
+        limit = 200
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/chat_messages",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,session_id,role,content,emotion,created_at",
+            "user_id": f"eq.{user_id}",
+            "session_id": f"eq.{session_id}",
+            "order": "created_at.asc,id.asc",
+            "limit": str(limit),
+            "offset": str(offset),
+        },
+    )
+    if status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    return jsonify({"ok": True, "messages": rows, "session": session_row})
+
+
+@app.post("/chat/messages")
+def chat_messages_append():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    session_id = str(payload.get("session_id", "")).strip()
+    role = str(payload.get("role", "")).strip().lower()
+    content = str(payload.get("content", "")).strip()
+    emotion = str(payload.get("emotion", "unknown")).strip().lower()
+
+    if not session_id:
+        return jsonify({"error": "missing_session_id"}), 400
+    if role not in {"user", "assistant"}:
+        return jsonify({"error": "invalid_role"}), 400
+    if not content:
+        return jsonify({"error": "empty_content"}), 400
+    if len(content) > CHAT_MESSAGE_LENGTH_LIMIT:
+        return jsonify({"error": "content_too_long", "limit": CHAT_MESSAGE_LENGTH_LIMIT}), 400
+    if emotion not in _ALLOWED_EMOTIONS:
+        emotion = "unknown"
+
+    session_row, lookup_error = _chat_get_session(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    if lookup_error:
+        return jsonify({"error": lookup_error}), 502
+    if not session_row:
+        return jsonify({"error": "session_not_found"}), 404
+
+    now_iso = _utc_now_iso()
+    status, data = _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/chat_messages",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        payload={
+            "user_id": user_id,
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+            "emotion": emotion,
+            "created_at": now_iso,
+        },
+        prefer="return=representation",
+    )
+    if status not in (200, 201):
+        return jsonify({"error": "supabase_insert_failed", "details": data}), 502
+
+    _chat_touch_session(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    keep_limit = _get_chat_max_messages_per_session()
+    _, prune_error = _prune_chat_messages(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        session_id=session_id,
+        keep_limit=keep_limit,
+    )
+    if prune_error:
+        return jsonify({"error": prune_error, "details": {"keep_limit": keep_limit}}), 502
+
+    rows = data if isinstance(data, list) else []
+    message = rows[0] if rows else None
+    return jsonify({"ok": True, "message": message}), 201
 
 
 @app.post("/detect")

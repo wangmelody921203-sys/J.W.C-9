@@ -929,6 +929,42 @@
     }
     .pet-close:hover { color: var(--text); }
 
+    .pet-session-row {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      flex-shrink: 0;
+    }
+    .pet-session-select {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 7px 10px;
+      font-size: 12px;
+      outline: none;
+    }
+    .pet-session-select:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+    .pet-session-btn {
+      min-width: 36px;
+      height: 32px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .pet-session-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
     .pet-messages {
       flex: 1;
       overflow-y: auto;
@@ -1173,6 +1209,11 @@
         <div class="pet-subtitle">勇氣同理教練模式・非心理諮商</div>
       </div>
       <button id="pet-close" class="pet-close" aria-label="關閉">✕</button>
+    </div>
+    <div class="pet-session-row">
+      <select id="pet-session-select" class="pet-session-select" aria-label="聊天室清單"></select>
+      <button id="pet-session-new" class="pet-session-btn" type="button" aria-label="新增聊天室">+</button>
+      <button id="pet-session-delete" class="pet-session-btn" type="button" aria-label="刪除聊天室">-</button>
     </div>
     <div id="pet-messages" class="pet-messages"></div>
     <div class="pet-input-row">
@@ -2383,6 +2424,9 @@
         setAuthState("帳戶：未登入");
       }
       updateAuthButtons();
+      if (typeof petHandleAuthStateChange === "function") {
+        petHandleAuthStateChange();
+      }
 
       supabaseClient.auth.onAuthStateChange((_event, session) => {
         currentSession = session;
@@ -2395,6 +2439,9 @@
           renderDiaryEntries([]);
         }
         updateAuthButtons();
+        if (typeof petHandleAuthStateChange === "function") {
+          petHandleAuthStateChange();
+        }
       });
     }
 
@@ -2750,6 +2797,9 @@
     const petTrigger  = document.getElementById("pet-trigger");
     const petPanel    = document.getElementById("pet-panel");
     const petClose    = document.getElementById("pet-close");
+    const petSessionSelect = document.getElementById("pet-session-select");
+    const petSessionNewBtn = document.getElementById("pet-session-new");
+    const petSessionDeleteBtn = document.getElementById("pet-session-delete");
     const petMessages = document.getElementById("pet-messages");
     const petInput    = document.getElementById("pet-input");
     const petSendBtn  = document.getElementById("pet-send");
@@ -2758,19 +2808,225 @@
     let petCurrentEmotion = "unknown";
     // 預設人格：勇氣同理教練（同理 + 小步行動）
     const petPersona = "courage_coach";
-    // 對話歷史：[{ role, content }, ...]，最多保留 10 輪
-    const petHistory = [];
+    // 對話歷史（目前聊天室）
+    let petHistory = [];
+    let petSessions = [];
+    let petCurrentSessionId = "";
+    let petSessionsLoadedUserKey = "";
     let petWaiting = false;
 
     function petSetDnd(on) {
       petTrigger.classList.toggle("dnd", on);
     }
 
-    function petOpen() {
+    function petGetUserKey() {
+      return String(currentSession?.user?.id || "").trim();
+    }
+
+    function petHasCloudSession() {
+      return Boolean(currentSession?.access_token && petGetUserKey());
+    }
+
+    function petSetSessionControlsEnabled(enabled) {
+      petSessionSelect.disabled = !enabled;
+      petSessionNewBtn.disabled = !enabled;
+      petSessionDeleteBtn.disabled = !enabled;
+    }
+
+    function petRenderSessionOptions() {
+      petSessionSelect.innerHTML = "";
+      if (!petSessions.length) {
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.textContent = petHasCloudSession() ? "尚無聊天室" : "未登入（暫不保存）";
+        petSessionSelect.appendChild(empty);
+        petSetSessionControlsEnabled(false);
+        return;
+      }
+
+      petSessions.forEach((session) => {
+        const option = document.createElement("option");
+        option.value = session.id;
+        option.textContent = session.title || "未命名對話";
+        petSessionSelect.appendChild(option);
+      });
+
+      if (!petCurrentSessionId || !petSessions.some((item) => item.id === petCurrentSessionId)) {
+        petCurrentSessionId = petSessions[0].id;
+      }
+      petSessionSelect.value = petCurrentSessionId;
+      petSetSessionControlsEnabled(petHasCloudSession());
+    }
+
+    function petRenderMessagesFromHistory() {
+      petMessages.innerHTML = "";
+      if (!petHistory.length) {
+        petAppend("pet", "嗨，我在這裡。你可以先說現在最卡的一件事，我會陪你拆成可行下一步。");
+        return;
+      }
+      petHistory.forEach((item) => {
+        if (!item || (item.role !== "user" && item.role !== "assistant")) {
+          return;
+        }
+        petAppend(item.role === "user" ? "user" : "pet", item.content || "");
+      });
+    }
+
+    function petEnsureLocalSession() {
+      petSessions = [{ id: "local-temporary", title: "本機暫存對話" }];
+      petCurrentSessionId = "local-temporary";
+      petHistory = [];
+      petRenderSessionOptions();
+      petRenderMessagesFromHistory();
+      petSetSessionControlsEnabled(false);
+      petSessionsLoadedUserKey = "";
+    }
+
+    async function petApi(path, init = {}) {
+      if (!currentSession?.access_token) {
+        throw new Error("missing_bearer");
+      }
+      const headers = {
+        "Authorization": `Bearer ${currentSession.access_token}`,
+      };
+      if (init.body) {
+        headers["Content-Type"] = "application/json";
+      }
+      const res = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        headers: {
+          ...headers,
+          ...(init.headers || {}),
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    async function petLoadCloudMessages(sessionId) {
+      if (!sessionId) {
+        petHistory = [];
+        petRenderMessagesFromHistory();
+        return;
+      }
+      try {
+        const data = await petApi(`/chat/messages?session_id=${encodeURIComponent(sessionId)}&limit=300`);
+        const rows = Array.isArray(data.messages) ? data.messages : [];
+        petHistory = rows
+          .map((row) => ({
+            role: row.role === "user" ? "user" : "assistant",
+            content: String(row.content || "").trim(),
+          }))
+          .filter((row) => row.content);
+      } catch (err) {
+        console.warn("[pet] load messages failed:", err);
+        petHistory = [];
+      }
+      petRenderMessagesFromHistory();
+    }
+
+    async function petCreateCloudSession(titleText = "新的對話") {
+      const payload = {
+        title: String(titleText || "新的對話").trim() || "新的對話",
+        persona: petPersona,
+      };
+      const data = await petApi("/chat/sessions", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      return data.session || null;
+    }
+
+    async function petLoadCloudSessions(force = false) {
+      if (!petHasCloudSession()) {
+        petEnsureLocalSession();
+        return;
+      }
+
+      const userKey = petGetUserKey();
+      if (!force && petSessionsLoadedUserKey === userKey && petSessions.length) {
+        return;
+      }
+
+      const data = await petApi("/chat/sessions?limit=60&offset=0");
+      let rows = Array.isArray(data.sessions) ? data.sessions : [];
+
+      if (!rows.length) {
+        const created = await petCreateCloudSession("新的對話");
+        rows = created ? [created] : [];
+      }
+
+      petSessions = rows.map((row) => ({
+        id: String(row.id || "").trim(),
+        title: String(row.title || "新的對話").trim() || "新的對話",
+      })).filter((row) => row.id);
+
+      petRenderSessionOptions();
+      await petLoadCloudMessages(petCurrentSessionId);
+      petSessionsLoadedUserKey = userKey;
+    }
+
+    async function petEnsureSessionReady(forceReload = false) {
+      if (!petHasCloudSession()) {
+        if (!petSessions.length || petCurrentSessionId !== "local-temporary") {
+          petEnsureLocalSession();
+        }
+        return;
+      }
+      try {
+        await petLoadCloudSessions(forceReload);
+      } catch (err) {
+        console.warn("[pet] load sessions failed:", err);
+        petEnsureLocalSession();
+      }
+    }
+
+    async function petSaveCloudMessage(role, content) {
+      if (!petHasCloudSession() || !petCurrentSessionId) {
+        return;
+      }
+      await petApi("/chat/messages", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: petCurrentSessionId,
+          role,
+          content,
+          emotion: petCurrentEmotion,
+        }),
+      });
+    }
+
+    async function petDeleteCurrentCloudSession() {
+      if (!petHasCloudSession() || !petCurrentSessionId) {
+        return;
+      }
+      if (!window.confirm("確定要刪除這個聊天室嗎？刪除後無法復原。")) {
+        return;
+      }
+      await petApi(`/chat/sessions/${encodeURIComponent(petCurrentSessionId)}`, {
+        method: "DELETE",
+      });
+      await petLoadCloudSessions(true);
+    }
+
+    function petHandleAuthStateChange() {
+      petSessionsLoadedUserKey = "";
+      petSessions = [];
+      petCurrentSessionId = "";
+      petHistory = [];
+      petEnsureSessionReady(true);
+    }
+
+    async function petOpen() {
       petPanel.classList.add("open");
       petInput.focus();
+      await petEnsureSessionReady(false);
       if (petMessages.children.length === 0) {
-        petAppend("pet", "嗨，我在這裡。你可以先說現在最卡的一件事，我會陪你拆成可行下一步。");
+        petRenderMessagesFromHistory();
       }
     }
 
@@ -2778,7 +3034,9 @@
       petPanel.classList.remove("open");
     }
 
-    petTrigger.addEventListener("click", petOpen);
+    petTrigger.addEventListener("click", () => {
+      void petOpen();
+    });
     petClose.addEventListener("click", petClose_);
 
     // Esc 關閉
@@ -2813,6 +3071,7 @@
     }
 
     async function petSend(userText) {
+      await petEnsureSessionReady(false);
       userText = userText.trim();
       if (!userText || petWaiting) return;
       if (userText.length > 500) {
@@ -2822,7 +3081,11 @@
 
       petAppend("user", userText);
       petHistory.push({ role: "user", content: userText });
-      if (petHistory.length > 20) petHistory.splice(0, petHistory.length - 20);
+      if (petHasCloudSession() && petCurrentSessionId) {
+        petSaveCloudMessage("user", userText).catch((err) => {
+          console.warn("[pet] save user message failed:", err);
+        });
+      }
 
       petWaiting = true;
       petSendBtn.disabled = true;
@@ -2838,7 +3101,7 @@
           body: JSON.stringify({
             emotion: petCurrentEmotion,
             persona: petPersona,
-            messages: petHistory,
+            messages: petHistory.slice(-20),
           }),
           signal: ctrl.signal,
         });
@@ -2857,7 +3120,11 @@
       loadingBubble.remove();
       petAppend("pet", reply);
       petHistory.push({ role: "assistant", content: reply });
-      if (petHistory.length > 20) petHistory.splice(0, petHistory.length - 20);
+      if (petHasCloudSession() && petCurrentSessionId) {
+        petSaveCloudMessage("assistant", reply).catch((err) => {
+          console.warn("[pet] save assistant message failed:", err);
+        });
+      }
 
       petWaiting = false;
       petSendBtn.disabled = false;
@@ -2883,6 +3150,48 @@
     petInput.addEventListener("input", () => {
       petInput.style.height = "auto";
       petInput.style.height = Math.min(petInput.scrollHeight, 120) + "px";
+    });
+
+    petSessionSelect.addEventListener("change", async () => {
+      const nextId = String(petSessionSelect.value || "").trim();
+      if (!nextId || nextId === petCurrentSessionId) {
+        return;
+      }
+      petCurrentSessionId = nextId;
+      await petLoadCloudMessages(petCurrentSessionId);
+    });
+
+    petSessionNewBtn.addEventListener("click", async () => {
+      if (!petHasCloudSession()) {
+        alert("請先登入，才能建立可保存的聊天室。\n目前未登入模式只提供暫存對話。");
+        return;
+      }
+      const title = window.prompt("請輸入聊天室名稱", "新的對話");
+      if (title === null) {
+        return;
+      }
+      try {
+        const created = await petCreateCloudSession(title);
+        if (!created || !created.id) {
+          throw new Error("create_failed");
+        }
+        petCurrentSessionId = String(created.id);
+        await petLoadCloudSessions(true);
+      } catch (err) {
+        alert("建立聊天室失敗，請稍後再試。");
+      }
+    });
+
+    petSessionDeleteBtn.addEventListener("click", async () => {
+      if (!petHasCloudSession()) {
+        alert("未登入模式無法刪除雲端聊天室。請先登入。");
+        return;
+      }
+      try {
+        await petDeleteCurrentCloudSession();
+      } catch (err) {
+        alert("刪除聊天室失敗，請稍後再試。");
+      }
     });
 
     // 掃描進行中啟用勿擾，掃描後帶入情緒並關閉勿擾
