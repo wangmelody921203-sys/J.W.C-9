@@ -262,6 +262,32 @@
       margin-bottom: 12px;
     }
 
+    .analytics-kpi-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .analytics-kpi {
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.02);
+      padding: 8px 10px;
+    }
+
+    .analytics-kpi-label {
+      font-size: 11px;
+      color: #9fb0c8;
+      margin-bottom: 4px;
+    }
+
+    .analytics-kpi-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #dff0ff;
+    }
+
     .analytics-card {
       border: 1px solid rgba(255, 255, 255, 0.08);
       background: rgba(255, 255, 255, 0.02);
@@ -304,6 +330,12 @@
 
     .insight-item strong {
       color: #89ffc0;
+    }
+
+    .insight-item.warning {
+      border-color: rgba(251, 191, 36, 0.4);
+      background: rgba(251, 191, 36, 0.08);
+      color: #ffecc3;
     }
 
     @keyframes panel-rise {
@@ -759,6 +791,10 @@
         grid-template-columns: 1fr;
       }
 
+      .analytics-kpi-row {
+        grid-template-columns: 1fr;
+      }
+
       .diary-filter-row {
         align-items: stretch;
       }
@@ -1058,6 +1094,20 @@
           <p class="analytics-subtitle">付費版核心洞察：每日情緒曲線、星期 x 時段平均，以及音樂類別偏好。</p>
         </div>
       </div>
+      <div id="analytics-kpi-row" class="analytics-kpi-row">
+        <div class="analytics-kpi">
+          <div class="analytics-kpi-label">樣本數</div>
+          <div class="analytics-kpi-value">0 筆</div>
+        </div>
+        <div class="analytics-kpi">
+          <div class="analytics-kpi-label">主要情緒</div>
+          <div class="analytics-kpi-value">--</div>
+        </div>
+        <div class="analytics-kpi">
+          <div class="analytics-kpi-label">平均壓力指數</div>
+          <div class="analytics-kpi-value">--</div>
+        </div>
+      </div>
       <div class="analytics-grid">
         <article class="analytics-card">
           <h3>每日情緒分數波動</h3>
@@ -1222,6 +1272,7 @@
     const emotionTrendCanvas = document.getElementById("emotion-trend-chart");
     const weekdaySlotCanvas = document.getElementById("weekday-slot-chart");
     const insightList = document.getElementById("insight-list");
+    const analyticsKpiRow = document.getElementById("analytics-kpi-row");
 
     let supabaseClient = null;
     let currentSession = null;
@@ -1340,6 +1391,12 @@
       return 3;
     }
 
+    function formatSlot(slotIndex) {
+      const title = SLOT_TITLES[slotIndex] || "未知時段";
+      const range = SLOT_LABELS[slotIndex] || "--";
+      return `${title} (${range})`;
+    }
+
     function computeAnalytics(entries) {
       const valid = (entries || []).map((entry) => {
         const date = parseEntryDate(entry);
@@ -1353,11 +1410,17 @@
 
       const dayMap = new Map();
       const slotAgg = Array.from({ length: 7 }, () => Array.from({ length: 4 }, () => ({ score: 0, stress: 0, count: 0 })));
+      const emotionCounts = {};
+      let totalMood = 0;
+      let totalStress = 0;
 
       valid.forEach((item) => {
         const dayKey = `${item.date.getFullYear()}-${String(item.date.getMonth() + 1).padStart(2, "0")}-${String(item.date.getDate()).padStart(2, "0")}`;
         const moodScore = (EMOTION_SCORES[item.emotion] ?? 0) * Math.max(item.share, 0.35);
         const stressScore = (EMOTION_STRESS_WEIGHTS[item.emotion] ?? 0.2) * Math.max(item.share, 0.35);
+        emotionCounts[item.emotion] = (emotionCounts[item.emotion] || 0) + 1;
+        totalMood += moodScore;
+        totalStress += stressScore;
 
         if (!dayMap.has(dayKey)) {
           dayMap.set(dayKey, { score: 0, stress: 0, count: 0 });
@@ -1388,22 +1451,26 @@
         }),
       }));
 
-      let maxStress = { weekday: 0, slot: 0, value: -1 };
-      let maxHappy = { weekday: 0, slot: 0, value: -2 };
+      let maxStress = null;
+      let maxHappy = null;
       for (let w = 0; w < 7; w += 1) {
         for (let s = 0; s < 4; s += 1) {
           const row = slotAgg[w][s];
           if (!row.count) continue;
           const stressAvg = row.stress / row.count;
           const moodAvg = row.score / row.count;
-          if (stressAvg > maxStress.value) {
+          if (!maxStress || stressAvg > maxStress.value) {
             maxStress = { weekday: w, slot: s, value: stressAvg };
           }
-          if (moodAvg > maxHappy.value) {
+          if (!maxHappy || moodAvg > maxHappy.value) {
             maxHappy = { weekday: w, slot: s, value: moodAvg };
           }
         }
       }
+
+      const topEmotion = Object.entries(emotionCounts).sort((a, b) => b[1] - a[1])[0] || null;
+      const avgMood = valid.length ? Number((totalMood / valid.length).toFixed(3)) : 0;
+      const avgStress = valid.length ? Number((totalStress / valid.length).toFixed(3)) : 0;
 
       return {
         trendLabels,
@@ -1411,8 +1478,35 @@
         slotByPeriod,
         maxStress,
         maxHappy,
+        topEmotion,
+        avgMood,
+        avgStress,
         sampleCount: valid.length,
       };
+    }
+
+    function renderAnalyticsKpis(summary) {
+      if (!analyticsKpiRow) {
+        return;
+      }
+
+      const topEmotionText = summary.topEmotion
+        ? `${EMOTION_LABELS_ZH[summary.topEmotion[0]] || summary.topEmotion[0]} (${summary.topEmotion[1]} 次)`
+        : "--";
+      analyticsKpiRow.innerHTML = `
+        <div class="analytics-kpi">
+          <div class="analytics-kpi-label">樣本數</div>
+          <div class="analytics-kpi-value">${summary.sampleCount} 筆</div>
+        </div>
+        <div class="analytics-kpi">
+          <div class="analytics-kpi-label">主要情緒</div>
+          <div class="analytics-kpi-value">${topEmotionText}</div>
+        </div>
+        <div class="analytics-kpi">
+          <div class="analytics-kpi-label">平均壓力指數</div>
+          <div class="analytics-kpi-value">${summary.avgStress.toFixed(2)} / 1.00</div>
+        </div>
+      `;
     }
 
     function destroyAnalyticsCharts() {
@@ -1511,8 +1605,20 @@
         return;
       }
 
-      const stressText = `${WEEKDAY_ZH[summary.maxStress.weekday]} ${SLOT_LABELS[summary.maxStress.slot]} 壓力分數最高`;
-      const happyText = `${WEEKDAY_ZH[summary.maxHappy.weekday]} ${SLOT_LABELS[summary.maxHappy.slot]} 愉悅分數最高`;
+      const lines = [];
+      if (summary.sampleCount < 10) {
+        lines.push({
+          text: `<strong>樣本提醒：</strong>目前僅 ${summary.sampleCount} 筆，先看趨勢方向，累積到 20 筆以上會更準。`,
+          warning: true,
+        });
+      }
+
+      const stressText = summary.maxStress
+        ? `${WEEKDAY_ZH[summary.maxStress.weekday]} ${formatSlot(summary.maxStress.slot)} 壓力分數最高（${summary.maxStress.value.toFixed(2)}）`
+        : "目前尚未形成可比較的壓力高峰時段。";
+      const happyText = summary.maxHappy
+        ? `${WEEKDAY_ZH[summary.maxHappy.weekday]} ${formatSlot(summary.maxHappy.slot)} 愉悅分數最高（${summary.maxHappy.value.toFixed(2)}）`
+        : "目前尚未形成可比較的愉悅高峰時段。";
       const clickStats = getMusicClickStats();
       const topCategory = Object.entries(clickStats)
         .sort((a, b) => b[1] - a[1])[0];
@@ -1520,13 +1626,15 @@
         ? `你最近最常點選的音樂類別是 <strong>${topCategory[0]}</strong>（${topCategory[1]} 次）`
         : "你尚未點擊音樂開啟連結，點擊後會開始統計偏好類別。";
 
-      [
+      lines.push(...[
         `<strong>洞察 1：</strong>${stressText}`,
         `<strong>洞察 2：</strong>${happyText}`,
         `<strong>洞察 3：</strong>${musicText}`,
-      ].forEach((text) => {
+      ].map((text) => ({ text, warning: false })));
+
+      lines.forEach(({ text, warning }) => {
         const row = document.createElement("div");
-        row.className = "insight-item";
+        row.className = `insight-item${warning ? " warning" : ""}`;
         row.innerHTML = text;
         insightList.appendChild(row);
       });
@@ -1536,6 +1644,7 @@
       const entries = getFilteredDiaryEntries();
       const summary = computeAnalytics(entries);
       renderAnalyticsCharts(summary);
+      renderAnalyticsKpis(summary);
       renderInsights(summary);
     }
 
