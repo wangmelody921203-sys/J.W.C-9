@@ -1490,6 +1490,22 @@
       return `${title} (${range})`;
     }
 
+    function toMoodIndex(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) {
+        return 50;
+      }
+      return Math.max(0, Math.min(100, (n + 1) * 50));
+    }
+
+    function toStressIndex(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) {
+        return 0;
+      }
+      return Math.max(0, Math.min(100, n * 100));
+    }
+
     function resolveSongCategoryMeta(song, fallbackEmotion = "unknown") {
       const trackId = String(song?.id || "").trim();
       if (trackId && MUSIC_CATEGORY_BY_TRACK_ID[trackId]) {
@@ -1532,7 +1548,19 @@
         }
         const emotion = String(entry.emotion || "unknown").toLowerCase();
         const share = Math.max(0, Math.min(100, Number(entry.share ?? 0))) / 100;
-        return { entry, date, emotion, share: Number.isFinite(share) ? share : 0 };
+        const normalizedShare = Number.isFinite(share) ? share : 0;
+        const moodScoreRaw = (EMOTION_SCORES[emotion] ?? 0) * Math.max(normalizedShare, 0.35);
+        const stressScoreRaw = (EMOTION_STRESS_WEIGHTS[emotion] ?? 0.2) * Math.max(normalizedShare, 0.35);
+        return {
+          entry,
+          date,
+          emotion,
+          share: normalizedShare,
+          moodScoreRaw,
+          moodIndex: Number(toMoodIndex(moodScoreRaw).toFixed(1)),
+          stressScoreRaw,
+          stressIndex: Number(toStressIndex(stressScoreRaw).toFixed(1)),
+        };
       }).filter(Boolean);
 
       const dayMap = new Map();
@@ -1543,38 +1571,47 @@
 
       valid.forEach((item) => {
         const dayKey = `${item.date.getFullYear()}-${String(item.date.getMonth() + 1).padStart(2, "0")}-${String(item.date.getDate()).padStart(2, "0")}`;
-        const moodScore = (EMOTION_SCORES[item.emotion] ?? 0) * Math.max(item.share, 0.35);
-        const stressScore = (EMOTION_STRESS_WEIGHTS[item.emotion] ?? 0.2) * Math.max(item.share, 0.35);
         emotionCounts[item.emotion] = (emotionCounts[item.emotion] || 0) + 1;
-        totalMood += moodScore;
-        totalStress += stressScore;
+        totalMood += item.moodScoreRaw;
+        totalStress += item.stressScoreRaw;
 
         if (!dayMap.has(dayKey)) {
           dayMap.set(dayKey, { score: 0, stress: 0, count: 0 });
         }
         const dayRow = dayMap.get(dayKey);
-        dayRow.score += moodScore;
-        dayRow.stress += stressScore;
+        dayRow.score += item.moodScoreRaw;
+        dayRow.stress += item.stressScoreRaw;
         dayRow.count += 1;
 
         const weekday = item.date.getDay();
         const slot = getSlotIndex(item.date.getHours());
-        slotAgg[weekday][slot].score += moodScore;
-        slotAgg[weekday][slot].stress += stressScore;
+        slotAgg[weekday][slot].score += item.moodScoreRaw;
+        slotAgg[weekday][slot].stress += item.stressScoreRaw;
         slotAgg[weekday][slot].count += 1;
       });
 
-      const trendLabels = [...dayMap.keys()].sort();
-      const trendValues = trendLabels.map((k) => {
-        const row = dayMap.get(k);
-        return row.count ? Number((row.score / row.count).toFixed(3)) : 0;
-      });
+      const uniqueDayCount = dayMap.size;
+      let trendMode = "daily";
+      let trendLabels = [];
+      let trendValues = [];
+      if (uniqueDayCount <= 1 && valid.length > 1) {
+        trendMode = "intraday";
+        const sorted = [...valid].sort((a, b) => a.date.getTime() - b.date.getTime());
+        trendLabels = sorted.map((item) => item.date.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit" }));
+        trendValues = sorted.map((item) => item.moodIndex);
+      } else {
+        trendLabels = [...dayMap.keys()].sort();
+        trendValues = trendLabels.map((k) => {
+          const row = dayMap.get(k);
+          return row.count ? Number(toMoodIndex(row.score / row.count).toFixed(1)) : 50;
+        });
+      }
 
       const slotByPeriod = SLOT_TITLES.map((slotName, slotIndex) => ({
         label: slotName,
         data: WEEKDAY_ZH.map((_, weekday) => {
           const row = slotAgg[weekday][slotIndex];
-          return row.count ? Number((row.score / row.count).toFixed(3)) : null;
+          return row.count ? Number(toMoodIndex(row.score / row.count).toFixed(1)) : null;
         }),
       }));
 
@@ -1600,6 +1637,7 @@
       const avgStress = valid.length ? Number((totalStress / valid.length).toFixed(3)) : 0;
 
       return {
+        trendMode,
         trendLabels,
         trendValues,
         slotByPeriod,
@@ -1608,6 +1646,8 @@
         topEmotion,
         avgMood,
         avgStress,
+        avgMoodIndex: Number(toMoodIndex(avgMood).toFixed(1)),
+        avgStressIndex: Number(toStressIndex(avgStress).toFixed(1)),
         sampleCount: valid.length,
       };
     }
@@ -1631,7 +1671,7 @@
         </div>
         <div class="analytics-kpi">
           <div class="analytics-kpi-label">平均壓力指數</div>
-          <div class="analytics-kpi-value">${summary.avgStress.toFixed(2)} / 1.00</div>
+          <div class="analytics-kpi-value">${summary.avgStressIndex.toFixed(0)} / 100</div>
         </div>
       `;
     }
@@ -1660,7 +1700,7 @@
           labels: summary.trendLabels,
           datasets: [
             {
-              label: "情緒分數",
+              label: summary.trendMode === "intraday" ? "當日情緒波動指數" : "每日情緒指數",
               data: summary.trendValues,
               borderColor: "#4ade80",
               backgroundColor: "rgba(74, 222, 128, 0.22)",
@@ -1678,9 +1718,17 @@
           scales: {
             x: { ticks: { color: "#9fb0c8" }, grid: { color: "rgba(255,255,255,0.04)" } },
             y: {
-              min: -1,
-              max: 1,
-              ticks: { color: "#9fb0c8" },
+              min: 0,
+              max: 100,
+              ticks: {
+                color: "#9fb0c8",
+                callback: (value) => `${value}`,
+              },
+              title: {
+                display: true,
+                text: "情緒指數 (0-100)",
+                color: "#9fb0c8",
+              },
               grid: { color: "rgba(255,255,255,0.05)" },
             },
           },
@@ -1708,9 +1756,17 @@
           scales: {
             x: { stacked: false, ticks: { color: "#9fb0c8" }, grid: { color: "rgba(255,255,255,0.03)" } },
             y: {
-              min: -1,
-              max: 1,
-              ticks: { color: "#9fb0c8" },
+              min: 0,
+              max: 100,
+              ticks: {
+                color: "#9fb0c8",
+                callback: (value) => `${value}`,
+              },
+              title: {
+                display: true,
+                text: "平均情緒指數 (0-100)",
+                color: "#9fb0c8",
+              },
               grid: { color: "rgba(255,255,255,0.05)" },
             },
           },
@@ -1741,10 +1797,10 @@
       }
 
       const stressText = summary.maxStress
-        ? `${WEEKDAY_ZH[summary.maxStress.weekday]} ${formatSlot(summary.maxStress.slot)} 壓力分數最高（${summary.maxStress.value.toFixed(2)}）`
+        ? `${WEEKDAY_ZH[summary.maxStress.weekday]} ${formatSlot(summary.maxStress.slot)} 壓力指數最高（${toStressIndex(summary.maxStress.value).toFixed(0)}/100）`
         : "目前尚未形成可比較的壓力高峰時段。";
       const happyText = summary.maxHappy
-        ? `${WEEKDAY_ZH[summary.maxHappy.weekday]} ${formatSlot(summary.maxHappy.slot)} 愉悅分數最高（${summary.maxHappy.value.toFixed(2)}）`
+        ? `${WEEKDAY_ZH[summary.maxHappy.weekday]} ${formatSlot(summary.maxHappy.slot)} 情緒指數最高（${toMoodIndex(summary.maxHappy.value).toFixed(0)}/100）`
         : "目前尚未形成可比較的愉悅高峰時段。";
       const clickStats = getMusicClickStats();
       const topCategory = Object.entries(clickStats)
