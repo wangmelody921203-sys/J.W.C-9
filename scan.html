@@ -3218,49 +3218,58 @@
       }
       petSaveCurrentLocalHistory();
       petCurrentSessionId = nextId;
-      if (petHasCloudSession()) {
-        await petLoadCloudMessages(petCurrentSessionId);
-      } else {
-        petLoadLocalHistory(petCurrentSessionId);
-        petRenderMessagesFromHistory();
+      // 優先載入本地歷史
+      petLoadLocalHistory(petCurrentSessionId);
+      petRenderMessagesFromHistory();
+      // 若登入且是雲端會話 ID，嘗試載入雲端訊息（覆蓋本地）
+      if (petHasCloudSession() && !nextId.startsWith("local-")) {
+        try {
+          await petLoadCloudMessages(nextId);
+        } catch (err) {
+          console.warn("[pet] load cloud messages failed, using local:", err);
+          // 雲端失敗，保持本地訊息
+        }
       }
     });
 
     petSessionNewBtn.addEventListener("click", async () => {
-      if (!petHasCloudSession()) {
-        const title = window.prompt("請輸入本機聊天室名稱", "本機對話");
-        if (title === null) {
-          return;
-        }
-        petSaveCurrentLocalHistory();
-        petCreateLocalSession(title);
-        return;
-      }
       const title = window.prompt("請輸入聊天室名稱", "新的對話");
       if (title === null) {
         return;
       }
-      try {
-        const created = await petCreateCloudSession(title);
-        if (!created || !created.id) {
-          throw new Error("create_failed");
+      petSaveCurrentLocalHistory();
+      // 先建立本地會話（立即可用）
+      petCreateLocalSession(title);
+      // 若登入且雲端可用，嘗試同步（背景進行，不阻擋 UI）
+      if (petHasCloudSession()) {
+        try {
+          const created = await petCreateCloudSession(title);
+          if (created && created.id) {
+            // 雲端成功，用雲端 ID 取代本地 ID
+            petCurrentSessionId = String(created.id);
+            await petLoadCloudSessions(true);
+          }
+        } catch (err) {
+          console.warn("[pet] cloud session creation failed, keeping local:", err);
+          // 雲端失敗，保留本地會話
         }
-        petCurrentSessionId = String(created.id);
-        await petLoadCloudSessions(true);
-      } catch (err) {
-        alert("建立聊天室失敗，請稍後再試。");
       }
     });
 
     petSessionDeleteBtn.addEventListener("click", async () => {
-      if (!petHasCloudSession()) {
-        petDeleteCurrentLocalSession();
+      if (!window.confirm("確定要刪除這個聊天室嗎？")) {
         return;
       }
-      try {
-        await petDeleteCurrentCloudSession();
-      } catch (err) {
-        alert("刪除聊天室失敗，請稍後再試。");
+      // 先刪除本地會話（立即可用）
+      petDeleteCurrentLocalSession();
+      // 若登入且雲端可用，嘗試同步刪除（背景進行，不阻擋 UI）
+      if (petHasCloudSession()) {
+        try {
+          await petDeleteCurrentCloudSession();
+        } catch (err) {
+          console.warn("[pet] cloud session deletion failed, but local deleted:", err);
+          // 雲端失敗，本地已刪除
+        }
       }
     });
 
