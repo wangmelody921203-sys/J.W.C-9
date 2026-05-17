@@ -3521,12 +3521,15 @@
       if (!window.confirm("確定要刪除這個聊天室嗎？")) {
         return;
       }
+      // 在本地刪除前先記錄目前的 ID（本地刪除後 petCurrentSessionId 會改變）
+      const targetId = petCurrentSessionId;
       // 先刪除本地會話（立即可用）
       petDeleteCurrentLocalSession();
-      // 若登入且雲端可用，嘗試同步刪除（背景進行，不阻擋 UI）
-      if (petCanUseCloud()) {
+      // 若登入且雲端可用，用原始 targetId 刪除雲端對應 session
+      if (petCanUseCloud() && targetId && !targetId.startsWith("local-")) {
         try {
-          await petDeleteCurrentCloudSession();
+          await petSupabaseDeleteSession(targetId);
+          await petLoadCloudSessions(true);
         } catch (err) {
           console.warn("[pet] cloud session deletion failed, but local deleted:", err);
           // 雲端失敗，本地已刪除
