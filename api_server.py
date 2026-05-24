@@ -234,6 +234,7 @@ AGENT_TASK_DETAILS_LIMIT = 1500
 AGENT_TOOL_LOG_TEXT_LIMIT = 3000
 _AGENT_TAG_PENDING = "__pending__"
 _AGENT_TAG_CONFIRMED = "__confirmed__"
+_AGENT_TAG_CONFLICT = "__conflict__"
 _ALLOWED_AGENT_MEMORY_KINDS = {
     "profile",
     "preference",
@@ -385,6 +386,21 @@ def _agent_is_memory_pending(tags_raw: list | None) -> bool:
     return _AGENT_TAG_PENDING in tags
 
 
+def _agent_is_memory_conflict(tags_raw: list | None) -> bool:
+    tags = [str(item or "").strip() for item in (tags_raw or [])]
+    return _AGENT_TAG_CONFLICT in tags
+
+
+def _agent_clean_memory_tags(tags_raw: list | None) -> list[str]:
+    tags: list[str] = []
+    for item in (tags_raw or []):
+        value = str(item or "").strip()
+        if not value:
+            continue
+        tags.append(value[:40])
+    return tags
+
+
 def _agent_build_memory_tags(tags_raw: list | None, *, pending: bool) -> list[str]:
     tags: list[str] = []
     for item in (tags_raw or []):
@@ -396,6 +412,89 @@ def _agent_build_memory_tags(tags_raw: list | None, *, pending: bool) -> list[st
         tags.append(value[:40])
     tags.append(_AGENT_TAG_PENDING if pending else _AGENT_TAG_CONFIRMED)
     return tags
+
+
+def _agent_memory_tokens(raw: str) -> set[str]:
+    text = str(raw or "").lower()
+    chunks = re.findall(r"[\w\u4e00-\u9fff]+", text)
+    tokens: set[str] = set()
+    for chunk in chunks:
+        value = chunk.strip()
+        if len(value) < 2:
+            continue
+        tokens.add(value[:32])
+    return tokens
+
+
+def _agent_memory_polarity(raw: str) -> int:
+    text = str(raw or "").lower()
+    pos_tokens = ("喜歡", "偏好", "習慣", "希望", "要", "會", "可以", "想要", "i like", "prefer", "want", "can")
+    neg_tokens = ("不喜歡", "討厭", "不要", "不能", "不可以", "不會", "避免", "地雷", "can't", "cannot", "don't", "dislike", "avoid")
+    score = 0
+    for token in pos_tokens:
+        if token in text:
+            score += 1
+    for token in neg_tokens:
+        if token in text:
+            score -= 1
+    if score > 0:
+        return 1
+    if score < 0:
+        return -1
+    return 0
+
+
+def _agent_find_memory_conflicts(*, content: str, kind: str, rows: list[dict], exclude_id: str | None = None) -> list[dict]:
+    fp_new = _agent_memory_fingerprint(content)
+    tokens_new = _agent_memory_tokens(content)
+    polarity_new = _agent_memory_polarity(content)
+    if not fp_new or not tokens_new:
+        return []
+
+    conflicts: list[dict] = []
+    exclude_key = str(exclude_id or "").strip()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id", "")).strip()
+        if exclude_key and row_id == exclude_key:
+            continue
+        row_kind = _normalize_agent_memory_kind(str(row.get("kind", "insight")))
+        if row_kind != _normalize_agent_memory_kind(kind):
+            continue
+
+        row_content = str(row.get("content", "")).strip()
+        if not row_content:
+            continue
+        fp_old = _agent_memory_fingerprint(row_content)
+        if fp_old == fp_new:
+            continue
+
+        tokens_old = _agent_memory_tokens(row_content)
+        if not tokens_old:
+            continue
+        overlap = len(tokens_new.intersection(tokens_old))
+        if overlap < 1:
+            continue
+
+        polarity_old = _agent_memory_polarity(row_content)
+        direct_polarity_conflict = (polarity_new != 0 and polarity_old != 0 and polarity_new != polarity_old)
+        hard_negation = any(token in content for token in ("不能", "不可以", "不要", "討厭", "不喜歡")) and any(
+            token in row_content for token in ("喜歡", "可以", "偏好", "習慣")
+        )
+        reverse_negation = any(token in row_content for token in ("不能", "不可以", "不要", "討厭", "不喜歡")) and any(
+            token in content for token in ("喜歡", "可以", "偏好", "習慣")
+        )
+        if direct_polarity_conflict or hard_negation or reverse_negation:
+            conflicts.append({
+                "id": row_id,
+                "kind": row_kind,
+                "content": row_content,
+                "importance": int(row.get("importance", 0) or 0),
+                "pending": _agent_is_memory_pending(row.get("tags") if isinstance(row.get("tags"), list) else []),
+            })
+
+    return conflicts[:5]
 
 
 def _agent_compute_memory_importance(*, kind: str, content: str, source: str, pending: bool) -> int:
@@ -1575,8 +1674,69 @@ def agent_memories_list():
             continue
         enriched = dict(row)
         enriched["pending"] = _agent_is_memory_pending(row.get("tags") if isinstance(row.get("tags"), list) else [])
+        enriched["conflict"] = _agent_is_memory_conflict(row.get("tags") if isinstance(row.get("tags"), list) else [])
         rows.append(enriched)
     return jsonify({"ok": True, "memories": rows})
+
+
+@app.get("/agent/memories/<memory_id>/conflicts")
+def agent_memory_conflicts(memory_id: str):
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    target_id = str(memory_id or "").strip()
+    if not target_id:
+        return jsonify({"error": "invalid_memory_id"}), 400
+
+    lookup_status, lookup_data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+            "id": f"eq.{target_id}",
+            "user_id": f"eq.{user_id}",
+            "limit": "1",
+        },
+    )
+    if lookup_status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": lookup_data}), 502
+    current_rows = lookup_data if isinstance(lookup_data, list) else []
+    current = current_rows[0] if current_rows else None
+    if not isinstance(current, dict):
+        return jsonify({"error": "memory_not_found"}), 404
+
+    neighbors_status, neighbors_data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+            "user_id": f"eq.{user_id}",
+            "kind": f"eq.{_normalize_agent_memory_kind(str(current.get('kind', 'insight')))}",
+            "order": "updated_at.desc,created_at.desc,id.desc",
+            "limit": "80",
+        },
+    )
+    if neighbors_status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": neighbors_data}), 502
+
+    rows = neighbors_data if isinstance(neighbors_data, list) else []
+    conflicts = _agent_find_memory_conflicts(
+        content=str(current.get("content", "")),
+        kind=str(current.get("kind", "insight")),
+        rows=rows,
+        exclude_id=str(current.get("id", "")),
+    )
+    return jsonify({"ok": True, "memory": current, "conflicts": conflicts})
 
 
 @app.post("/agent/memories")
@@ -1613,6 +1773,25 @@ def agent_memories_create():
     kind = _normalize_agent_memory_kind(kind_input or _agent_infer_memory_kind_from_text(content))
     pending = bool(payload.get("pending", source != "manual_curation"))
     tags = _agent_build_memory_tags(user_tags, pending=pending)
+    neighbors_status, neighbors_data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+            "user_id": f"eq.{user_id}",
+            "kind": f"eq.{kind}",
+            "order": "updated_at.desc,created_at.desc,id.desc",
+            "limit": "80",
+        },
+    )
+    if neighbors_status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": neighbors_data}), 502
+    neighbors_rows = neighbors_data if isinstance(neighbors_data, list) else []
+    conflicts = _agent_find_memory_conflicts(content=content, kind=kind, rows=neighbors_rows)
+    if conflicts:
+        tags = _agent_clean_memory_tags(tags + [_AGENT_TAG_CONFLICT])
     importance = _agent_compute_memory_importance(kind=kind, content=content, source=source, pending=pending)
 
     now_iso = _utc_now_iso()
@@ -1651,7 +1830,8 @@ def agent_memories_create():
     memory = rows[0] if rows else None
     if isinstance(memory, dict):
         memory["pending"] = _agent_is_memory_pending(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
-    return jsonify({"ok": True, "memory": memory}), 201
+        memory["conflict"] = _agent_is_memory_conflict(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
+    return jsonify({"ok": True, "memory": memory, "conflicts": conflicts}), 201
 
 
 @app.patch("/agent/memories/<memory_id>")
@@ -1726,6 +1906,35 @@ def agent_memories_update(memory_id: str):
     final_kind = str(patch_doc.get("kind", current.get("kind", "insight")))
     final_content = str(patch_doc.get("content", current.get("content", "")))
     final_source = str(current.get("source", "chat"))
+
+    neighbors_status, neighbors_data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+            "user_id": f"eq.{user_id}",
+            "kind": f"eq.{_normalize_agent_memory_kind(final_kind)}",
+            "order": "updated_at.desc,created_at.desc,id.desc",
+            "limit": "80",
+        },
+    )
+    if neighbors_status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": neighbors_data}), 502
+    neighbors_rows = neighbors_data if isinstance(neighbors_data, list) else []
+    conflicts = _agent_find_memory_conflicts(
+        content=final_content,
+        kind=final_kind,
+        rows=neighbors_rows,
+        exclude_id=target_id,
+    )
+    current_tags = patch_doc.get("tags") if isinstance(patch_doc.get("tags"), list) else []
+    if conflicts:
+        patch_doc["tags"] = _agent_clean_memory_tags(list(current_tags) + [_AGENT_TAG_CONFLICT])
+    else:
+        patch_doc["tags"] = [tag for tag in current_tags if tag != _AGENT_TAG_CONFLICT]
+
     patch_doc["importance"] = _agent_compute_memory_importance(
         kind=_normalize_agent_memory_kind(final_kind),
         content=final_content,
@@ -1757,7 +1966,8 @@ def agent_memories_update(memory_id: str):
         return jsonify({"error": "memory_not_found"}), 404
     if isinstance(memory, dict):
         memory["pending"] = _agent_is_memory_pending(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
-    return jsonify({"ok": True, "memory": memory})
+        memory["conflict"] = _agent_is_memory_conflict(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
+    return jsonify({"ok": True, "memory": memory, "conflicts": conflicts})
 
 
 @app.delete("/agent/memories/<memory_id>")
@@ -2149,6 +2359,26 @@ def _agent_create_memory(*, supabase_url: str, service_key: str, user_id: str, k
     safe_tags = _agent_build_memory_tags(tags or [], pending=is_pending)
     importance = _agent_compute_memory_importance(kind=safe_kind, content=safe_content, source=source, pending=is_pending)
 
+    neighbors_status, neighbors_data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+            "user_id": f"eq.{user_id}",
+            "kind": f"eq.{safe_kind}",
+            "order": "updated_at.desc,created_at.desc,id.desc",
+            "limit": "80",
+        },
+    )
+    if neighbors_status != 200:
+        return None, f"supabase_query_failed:{neighbors_data}"
+    neighbors_rows = neighbors_data if isinstance(neighbors_data, list) else []
+    conflicts = _agent_find_memory_conflicts(content=safe_content, kind=safe_kind, rows=neighbors_rows)
+    if conflicts:
+        safe_tags = _agent_clean_memory_tags(safe_tags + [_AGENT_TAG_CONFLICT])
+
     # Simple duplicate guard: same kind + same normalized content => reuse existing.
     fp = _agent_memory_fingerprint(safe_content)
     if fp:
@@ -2200,6 +2430,8 @@ def _agent_create_memory(*, supabase_url: str, service_key: str, user_id: str, k
     memory = rows[0] if rows else None
     if isinstance(memory, dict):
         memory["pending"] = _agent_is_memory_pending(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
+        memory["conflict"] = _agent_is_memory_conflict(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
+        memory["conflicts"] = conflicts
     return memory, None
 
 
