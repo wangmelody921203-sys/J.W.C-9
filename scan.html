@@ -899,6 +899,19 @@
       pointer-events: auto;
     }
 
+    .pet-panel.custom-size {
+      max-height: none;
+    }
+
+    .pet-panel.expanded {
+      width: min(680px, calc(100vw - 32px));
+      height: min(82vh, 760px);
+      max-height: calc(100vh - 24px);
+      bottom: 12px;
+      right: 12px;
+      transform-origin: bottom right;
+    }
+
     .pet-header {
       display: flex;
       align-items: center;
@@ -928,6 +941,29 @@
       transition: color 0.12s ease;
     }
     .pet-close:hover { color: var(--text); }
+
+    .pet-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .pet-resize {
+      background: none;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 6px 8px;
+      border-radius: 8px;
+      transition: border-color 0.12s ease, color 0.12s ease;
+    }
+
+    .pet-resize:hover {
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.32);
+    }
 
     .pet-session-row {
       display: flex;
@@ -962,6 +998,133 @@
     }
     .pet-session-btn:disabled {
       opacity: 0.65;
+    }
+
+    .pet-memory-row {
+      display: flex;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      flex-shrink: 0;
+    }
+    .pet-memory-toggle,
+    .pet-memory-btn {
+      border-radius: 9px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1;
+      height: 28px;
+      cursor: pointer;
+      padding: 0 10px;
+    }
+    .pet-memory-toggle {
+      flex: 1;
+      text-align: left;
+    }
+    .pet-memory-btn-wide {
+      min-width: 58px;
+    }
+    .pet-memory-panel {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 8px 10px;
+      max-height: 170px;
+      overflow-y: auto;
+      display: none;
+      flex-shrink: 0;
+    }
+    .pet-memory-panel.open {
+      display: block;
+    }
+    .pet-memory-filters {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .pet-memory-filter-row {
+      display: flex;
+      gap: 6px;
+    }
+    .pet-memory-filter,
+    .pet-memory-search {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text);
+      min-height: 28px;
+      font-size: 12px;
+      padding: 4px 8px;
+      outline: none;
+    }
+    .pet-memory-filter option {
+      color: #0f172a;
+      background: #f8fafc;
+    }
+    .pet-memory-item {
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 10px;
+      padding: 8px;
+      margin-bottom: 8px;
+    }
+    .pet-memory-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    .pet-memory-content {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.45;
+      white-space: pre-wrap;
+      margin-bottom: 6px;
+    }
+    .pet-memory-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .pet-memory-action {
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text);
+      border-radius: 7px;
+      font-size: 11px;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+    .pet-memory-empty {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 4px;
+    }
+    .pet-memory-history {
+      border-top: 1px dashed rgba(255, 255, 255, 0.12);
+      margin-top: 8px;
+      padding-top: 8px;
+    }
+    .pet-memory-history-title {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .pet-memory-history-list {
+      display: grid;
+      gap: 6px;
+    }
+    .pet-memory-history-item {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 6px;
+      font-size: 11px;
+      color: #c8d6e5;
+      background: rgba(255, 255, 255, 0.02);
+      line-height: 1.4;
+    }
+    .pet-memory-item.conflict {
+      border-color: rgba(251, 191, 36, 0.42);
+      box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.08);
     }
 
     .pet-messages {
@@ -1064,6 +1227,54 @@
       align-self: flex-end;
     }
     .pet-send:disabled { opacity: 0.4; cursor: default; }
+
+    .pet-resize-handle {
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--muted);
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1;
+      cursor: nesw-resize;
+      opacity: 0.9;
+      padding: 0;
+    }
+
+    .pet-resize-handle:hover {
+      opacity: 1;
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.32);
+    }
+
+    @media (max-width: 640px) {
+      .pet-panel {
+        right: 8px;
+        bottom: 86px;
+        width: calc(100vw - 16px);
+        max-height: calc(100vh - 110px);
+      }
+
+      .pet-panel.expanded {
+        right: 0;
+        bottom: 0;
+        width: 100vw;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+      }
+
+      .pet-memory-panel {
+        max-height: 32vh;
+      }
+
+      .pet-resize-handle {
+        display: none;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1223,12 +1434,49 @@
         <div class="pet-title">陰晴 🌿</div>
         <div class="pet-subtitle">勇氣同理教練模式・非心理諮商</div>
       </div>
-      <button id="pet-close" class="pet-close" aria-label="關閉">✕</button>
+      <div class="pet-header-actions">
+        <button id="pet-resize-handle" class="pet-resize-handle" type="button" aria-label="拖拉調整聊天視窗大小" title="拖拉調整聊天視窗大小">⤡</button>
+        <button id="pet-resize" class="pet-resize" type="button" aria-label="放大對話視窗">放大</button>
+        <button id="pet-close" class="pet-close" aria-label="關閉">✕</button>
+      </div>
     </div>
     <div class="pet-session-row">
       <select id="pet-session-select" class="pet-session-select" aria-label="聊天室清單"></select>
       <button id="pet-session-new" class="pet-session-btn" type="button" aria-label="新增聊天室">新</button>
       <button id="pet-session-delete" class="pet-session-btn" type="button" aria-label="刪除聊天室">刪</button>
+    </div>
+    <div class="pet-memory-row">
+      <button id="pet-memory-toggle" class="pet-memory-toggle" type="button" aria-label="展開記憶庫">記憶庫（可編輯）</button>
+      <button id="pet-memory-confirm-all" class="pet-memory-btn pet-memory-btn-wide" type="button" aria-label="批次確認待確認記憶">批次確認</button>
+      <button id="pet-memory-history-toggle" class="pet-memory-btn" type="button" aria-label="查看治理紀錄">歷史</button>
+      <button id="pet-memory-add" class="pet-memory-btn" type="button" aria-label="新增記憶">＋記</button>
+      <button id="pet-memory-refresh" class="pet-memory-btn" type="button" aria-label="刷新記憶">↻</button>
+    </div>
+    <div id="pet-memory-panel" class="pet-memory-panel" aria-label="Agent 記憶庫">
+      <div class="pet-memory-filters">
+        <div class="pet-memory-filter-row">
+          <select id="pet-memory-kind-filter" class="pet-memory-filter" aria-label="記憶分類篩選">
+            <option value="all">全部分類</option>
+            <option value="profile">人物背景</option>
+            <option value="preference">偏好</option>
+            <option value="constraint">限制</option>
+            <option value="goal">目標</option>
+            <option value="event">事件</option>
+            <option value="insight">洞察</option>
+          </select>
+          <select id="pet-memory-status-filter" class="pet-memory-filter" aria-label="記憶狀態篩選">
+            <option value="all">全部狀態</option>
+            <option value="pending">待確認</option>
+            <option value="confirmed">已確認</option>
+          </select>
+        </div>
+        <input id="pet-memory-search" class="pet-memory-search" type="search" placeholder="搜尋記憶內容..." aria-label="搜尋記憶內容">
+      </div>
+      <div id="pet-memory-list" class="pet-memory-list"></div>
+      <div id="pet-memory-history" class="pet-memory-history" style="display:none">
+        <div class="pet-memory-history-title">治理紀錄（衝突處理 / 批次確認）</div>
+        <div id="pet-memory-history-list" class="pet-memory-history-list"></div>
+      </div>
     </div>
     <div id="pet-messages" class="pet-messages"></div>
     <div class="pet-input-row">
@@ -2916,9 +3164,23 @@
     const petTrigger  = document.getElementById("pet-trigger");
     const petPanel    = document.getElementById("pet-panel");
     const petClose    = document.getElementById("pet-close");
+    const petResizeBtn = document.getElementById("pet-resize");
+    const petResizeHandle = document.getElementById("pet-resize-handle");
     const petSessionSelect = document.getElementById("pet-session-select");
     const petSessionNewBtn = document.getElementById("pet-session-new");
     const petSessionDeleteBtn = document.getElementById("pet-session-delete");
+    const petMemoryToggleBtn = document.getElementById("pet-memory-toggle");
+    const petMemoryConfirmAllBtn = document.getElementById("pet-memory-confirm-all");
+    const petMemoryHistoryToggleBtn = document.getElementById("pet-memory-history-toggle");
+    const petMemoryAddBtn = document.getElementById("pet-memory-add");
+    const petMemoryRefreshBtn = document.getElementById("pet-memory-refresh");
+    const petMemoryPanel = document.getElementById("pet-memory-panel");
+    const petMemoryKindFilter = document.getElementById("pet-memory-kind-filter");
+    const petMemoryStatusFilter = document.getElementById("pet-memory-status-filter");
+    const petMemorySearch = document.getElementById("pet-memory-search");
+    const petMemoryList = document.getElementById("pet-memory-list");
+    const petMemoryHistoryBox = document.getElementById("pet-memory-history");
+    const petMemoryHistoryList = document.getElementById("pet-memory-history-list");
     const petMessages = document.getElementById("pet-messages");
     const petInput    = document.getElementById("pet-input");
     const petSendBtn  = document.getElementById("pet-send");
@@ -2934,20 +3196,239 @@
     let petSessionsLoadedUserKey = "";
     let petLocalSessionHistories = {};
     let petLocalLoadedStorageKey = "";
+    let petMemoryPanelOpen = false;
+    let petAgentMemories = [];
+    let petMemoriesLoadedUserKey = "";
     let petCloudHealthy = true;
     let petWaiting = false;
+    let petPanelExpanded = false;
+    let petPanelCustomSize = null;
+    let petMemorySearchTimer = null;
+    let petMemoryHistoryOpen = false;
+    let petMemoryGovernanceEvents = [];
+    let petMemoryFilters = {
+      kind: "all",
+      status: "all",
+      q: "",
+    };
     let petLastSafetyMode = "normal";
     let petLastCrisisLevel = "";
     let petLastCrisisPhase = "";
     let petLastCrisisNoticeAt = 0;
     const PET_CRISIS_NOTICE_COOLDOWN_MS = 2 * 60 * 1000;
+    const PET_PANEL_EXPANDED_KEY = "pet-panel-expanded-v1";
+    const PET_PANEL_SIZE_KEY = "pet-panel-size-v1";
 
     function petSetDnd(on) {
       petTrigger.classList.toggle("dnd", on);
     }
 
+    function petIsMobileViewport() {
+      return window.matchMedia("(max-width: 640px)").matches;
+    }
+
+    function petGetPanelSizeLimit() {
+      const maxWidth = Math.max(320, Math.min(window.innerWidth - 16, 900));
+      const maxHeight = Math.max(360, Math.min(window.innerHeight - 20, 860));
+      return {
+        minWidth: 320,
+        minHeight: 380,
+        maxWidth,
+        maxHeight,
+      };
+    }
+
+    function petApplyCustomSize() {
+      if (!petPanel) {
+        return;
+      }
+      if (petPanelExpanded || petIsMobileViewport() || !petPanelCustomSize) {
+        petPanel.classList.remove("custom-size");
+        petPanel.style.width = "";
+        petPanel.style.height = "";
+        return;
+      }
+      const limit = petGetPanelSizeLimit();
+      const width = Math.max(limit.minWidth, Math.min(limit.maxWidth, Number(petPanelCustomSize.width) || 360));
+      const height = Math.max(limit.minHeight, Math.min(limit.maxHeight, Number(petPanelCustomSize.height) || 520));
+      petPanelCustomSize = { width, height };
+      petPanel.classList.add("custom-size");
+      petPanel.style.width = `${width}px`;
+      petPanel.style.height = `${height}px`;
+    }
+
+    function petLoadPanelCustomSize() {
+      try {
+        const raw = localStorage.getItem(PET_PANEL_SIZE_KEY);
+        if (!raw) {
+          petPanelCustomSize = null;
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        if (parsed && Number.isFinite(parsed.width) && Number.isFinite(parsed.height)) {
+          petPanelCustomSize = {
+            width: Number(parsed.width),
+            height: Number(parsed.height),
+          };
+        }
+      } catch (_) {
+        petPanelCustomSize = null;
+      }
+      petApplyCustomSize();
+    }
+
+    function petSavePanelCustomSize() {
+      if (!petPanelCustomSize) {
+        return;
+      }
+      try {
+        localStorage.setItem(PET_PANEL_SIZE_KEY, JSON.stringify(petPanelCustomSize));
+      } catch (_) {
+        // ignore localStorage errors
+      }
+    }
+
+    function petLoadPanelExpandedState() {
+      try {
+        petPanelExpanded = localStorage.getItem(PET_PANEL_EXPANDED_KEY) === "1";
+      } catch (_) {
+        petPanelExpanded = false;
+      }
+      petApplyPanelExpandedState();
+    }
+
+    function petApplyPanelExpandedState() {
+      petPanel.classList.toggle("expanded", petPanelExpanded);
+      petApplyCustomSize();
+      if (!petResizeBtn) {
+        return;
+      }
+      petResizeBtn.textContent = petPanelExpanded ? "還原" : "放大";
+      petResizeBtn.setAttribute("aria-label", petPanelExpanded ? "還原對話視窗" : "放大對話視窗");
+      petResizeBtn.title = petPanelExpanded ? "還原對話視窗" : "放大對話視窗";
+    }
+
+    function petTogglePanelExpanded() {
+      petPanelExpanded = !petPanelExpanded;
+      petApplyPanelExpandedState();
+      try {
+        localStorage.setItem(PET_PANEL_EXPANDED_KEY, petPanelExpanded ? "1" : "0");
+      } catch (_) {
+        // ignore localStorage errors
+      }
+    }
+
+    function petInitPanelResizeHandle() {
+      if (!petResizeHandle || !petPanel) {
+        return;
+      }
+      let dragging = false;
+      let startX = 0;
+      let startY = 0;
+      let startWidth = 0;
+      let startHeight = 0;
+
+      const onMove = (event) => {
+        if (!dragging || petPanelExpanded || petIsMobileViewport()) {
+          return;
+        }
+        const dx = event.clientX - startX;
+        const dy = event.clientY - startY;
+        const limit = petGetPanelSizeLimit();
+        const width = Math.max(limit.minWidth, Math.min(limit.maxWidth, startWidth + dx));
+        const height = Math.max(limit.minHeight, Math.min(limit.maxHeight, startHeight - dy));
+        petPanelCustomSize = { width, height };
+        petApplyCustomSize();
+      };
+
+      const stopDrag = () => {
+        if (!dragging) {
+          return;
+        }
+        dragging = false;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", stopDrag);
+        petSavePanelCustomSize();
+      };
+
+      petResizeHandle.addEventListener("pointerdown", (event) => {
+        if (petPanelExpanded || petIsMobileViewport()) {
+          return;
+        }
+        dragging = true;
+        startX = event.clientX;
+        startY = event.clientY;
+        const rect = petPanel.getBoundingClientRect();
+        startWidth = rect.width;
+        startHeight = rect.height;
+        petResizeHandle.setPointerCapture(event.pointerId);
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", stopDrag);
+      });
+    }
+
     function petGetUserKey() {
       return String(currentSession?.user?.id || "").trim();
+    }
+
+    const PET_MEMORY_KIND_LABELS = {
+      profile: "人物背景",
+      preference: "偏好",
+      constraint: "限制",
+      goal: "目標",
+      event: "事件",
+      insight: "洞察",
+    };
+    const PET_MEMORY_KIND_ALIASES = {
+      profile: "profile",
+      "人物": "profile",
+      "人物背景": "profile",
+      "背景": "profile",
+      preference: "preference",
+      "偏好": "preference",
+      "喜好": "preference",
+      constraint: "constraint",
+      "限制": "constraint",
+      "界線": "constraint",
+      goal: "goal",
+      "目標": "goal",
+      event: "event",
+      "事件": "event",
+      insight: "insight",
+      "洞察": "insight",
+    };
+
+    function petNormalizeMemoryKind(raw) {
+      const key = String(raw || "").trim().toLowerCase();
+      if (PET_MEMORY_KIND_LABELS[key]) {
+        return key;
+      }
+      return PET_MEMORY_KIND_ALIASES[key] || "insight";
+    }
+
+    function petMemoryKindLabel(kind) {
+      return PET_MEMORY_KIND_LABELS[petNormalizeMemoryKind(kind)] || "洞察";
+    }
+
+    function petMemoryIsPending(memory) {
+      if (!memory || typeof memory !== "object") {
+        return false;
+      }
+      if (memory.pending === true) {
+        return true;
+      }
+      const tags = Array.isArray(memory.tags) ? memory.tags : [];
+      return tags.includes("__pending__");
+    }
+
+    function petMeaningfulMemory(text) {
+      const value = String(text || "").trim();
+      if (value.length < 8) {
+        return false;
+      }
+      const low = value.toLowerCase();
+      const weak = ["test", "testing", "測試", "記住", "記一下", "先記住", "先記著"];
+      return !weak.includes(low);
     }
 
     function petHasCloudSession() {
@@ -3238,6 +3719,510 @@
       return data;
     }
 
+    async function petAgentApi(path, init = {}) {
+      if (!currentSession?.access_token) {
+        throw new Error("missing_bearer");
+      }
+      const headers = {
+        "Authorization": `Bearer ${currentSession.access_token}`,
+      };
+      if (init.body) {
+        headers["Content-Type"] = "application/json";
+      }
+      const res = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        headers: {
+          ...headers,
+          ...(init.headers || {}),
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    function petRenderMemoryList() {
+      if (!petMemoryList) {
+        return;
+      }
+      petMemoryList.innerHTML = "";
+      if (!petHasCloudSession()) {
+        const empty = document.createElement("div");
+        empty.className = "pet-memory-empty";
+        empty.textContent = "登入後可顯示並編輯 Agent 記憶庫。";
+        petMemoryList.appendChild(empty);
+        return;
+      }
+      if (!petAgentMemories.length) {
+        const empty = document.createElement("div");
+        empty.className = "pet-memory-empty";
+        if (petMemoryFilters.kind !== "all" || petMemoryFilters.status !== "all" || petMemoryFilters.q) {
+          empty.textContent = "目前篩選條件下沒有記憶，請調整分類/狀態/關鍵字。";
+        } else {
+          empty.textContent = "目前沒有記憶。建議存具體、可行動、可驗證的內容。";
+        }
+        petMemoryList.appendChild(empty);
+        return;
+      }
+
+      petAgentMemories.forEach((memory) => {
+        const id = String(memory?.id || "").trim();
+        if (!id) {
+          return;
+        }
+        const item = document.createElement("div");
+        item.className = "pet-memory-item";
+        const conflict = Boolean(memory.conflict);
+        if (conflict) {
+          item.classList.add("conflict");
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "pet-memory-meta";
+        const kind = String(memory.kind || "insight");
+        const kindLabel = petMemoryKindLabel(kind);
+        const importance = Number(memory.importance || 50);
+        const pending = petMemoryIsPending(memory);
+        meta.textContent = `${kindLabel} ・${pending ? "待確認" : "已確認"}${conflict ? " ・衝突" : ""} ・分數 ${importance}`;
+
+        const content = document.createElement("div");
+        content.className = "pet-memory-content";
+        content.textContent = String(memory.content || "");
+
+        const actions = document.createElement("div");
+        actions.className = "pet-memory-actions";
+
+        const editBtn = document.createElement("button");
+        editBtn.className = "pet-memory-action";
+        editBtn.type = "button";
+        editBtn.textContent = "編輯";
+        editBtn.setAttribute("data-action", "edit-memory");
+        editBtn.setAttribute("data-memory-id", id);
+
+        const delBtn = document.createElement("button");
+        delBtn.className = "pet-memory-action";
+        delBtn.type = "button";
+        delBtn.textContent = "刪除";
+        delBtn.setAttribute("data-action", "delete-memory");
+        delBtn.setAttribute("data-memory-id", id);
+
+        if (pending) {
+          const confirmBtn = document.createElement("button");
+          confirmBtn.className = "pet-memory-action";
+          confirmBtn.type = "button";
+          confirmBtn.textContent = "確認";
+          confirmBtn.setAttribute("data-action", "confirm-memory");
+          confirmBtn.setAttribute("data-memory-id", id);
+          actions.appendChild(confirmBtn);
+        }
+
+        if (conflict) {
+          const resolveBtn = document.createElement("button");
+          resolveBtn.className = "pet-memory-action";
+          resolveBtn.type = "button";
+          resolveBtn.textContent = "處理衝突";
+          resolveBtn.setAttribute("data-action", "resolve-conflict");
+          resolveBtn.setAttribute("data-memory-id", id);
+          actions.appendChild(resolveBtn);
+        }
+
+        actions.appendChild(editBtn);
+        actions.appendChild(delBtn);
+        item.appendChild(meta);
+        item.appendChild(content);
+        item.appendChild(actions);
+        petMemoryList.appendChild(item);
+      });
+    }
+
+    async function petLoadMemories(force = false) {
+      if (!petHasCloudSession()) {
+        petAgentMemories = [];
+        petMemoriesLoadedUserKey = "";
+        petRenderMemoryList();
+        return;
+      }
+      const userKey = petGetUserKey();
+      if (!force && petMemoriesLoadedUserKey === userKey && petAgentMemories.length) {
+        petRenderMemoryList();
+        return;
+      }
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", "60");
+        params.set("offset", "0");
+        if (petMemoryFilters.kind && petMemoryFilters.kind !== "all") {
+          params.set("kind", petMemoryFilters.kind);
+        }
+        if (petMemoryFilters.status && petMemoryFilters.status !== "all") {
+          params.set("status", petMemoryFilters.status);
+        }
+        if (petMemoryFilters.q) {
+          params.set("q", petMemoryFilters.q);
+        }
+        const data = await petAgentApi(`/agent/memories?${params.toString()}`);
+        const rows = Array.isArray(data.memories) ? data.memories : [];
+        petAgentMemories = rows
+          .filter((row) => row && row.id && row.content)
+          .map((row) => ({
+            id: String(row.id),
+            kind: petNormalizeMemoryKind(row.kind || "insight"),
+            content: String(row.content || "").trim(),
+            importance: Number(row.importance || 50),
+            tags: Array.isArray(row.tags) ? row.tags : [],
+            pending: Boolean(row.pending),
+            conflict: Boolean(row.conflict),
+          }))
+          .filter((row) => row.content);
+        petMemoriesLoadedUserKey = userKey;
+      } catch (err) {
+        console.warn("[pet] load memories failed:", err);
+      }
+      petRenderMemoryList();
+    }
+
+    function petBindMemoryFilters() {
+      if (petMemoryKindFilter) {
+        petMemoryKindFilter.addEventListener("change", async () => {
+          petMemoryFilters.kind = String(petMemoryKindFilter.value || "all");
+          await petLoadMemories(true);
+        });
+      }
+      if (petMemoryStatusFilter) {
+        petMemoryStatusFilter.addEventListener("change", async () => {
+          petMemoryFilters.status = String(petMemoryStatusFilter.value || "all");
+          await petLoadMemories(true);
+        });
+      }
+      if (petMemorySearch) {
+        petMemorySearch.addEventListener("input", () => {
+          petMemoryFilters.q = String(petMemorySearch.value || "").trim();
+          if (petMemorySearchTimer) {
+            clearTimeout(petMemorySearchTimer);
+          }
+          petMemorySearchTimer = setTimeout(() => {
+            void petLoadMemories(true);
+          }, 260);
+        });
+      }
+    }
+
+    function petRenderMemoryGovernanceHistory() {
+      if (!petMemoryHistoryList) {
+        return;
+      }
+      petMemoryHistoryList.innerHTML = "";
+      if (!petMemoryGovernanceEvents.length) {
+        const empty = document.createElement("div");
+        empty.className = "pet-memory-empty";
+        empty.textContent = "目前沒有治理紀錄。";
+        petMemoryHistoryList.appendChild(empty);
+        return;
+      }
+
+      petMemoryGovernanceEvents.forEach((row) => {
+        const item = document.createElement("div");
+        item.className = "pet-memory-history-item";
+        const tool = String(row?.tool_name || "event");
+        const status = String(row?.status || "success");
+        const ts = String(row?.created_at || "").replace("T", " ").replace("Z", "").slice(0, 19);
+        let summary = "";
+        try {
+          const outputRaw = String(row?.output || "").trim();
+          if (outputRaw.startsWith("{") || outputRaw.startsWith("[")) {
+            const parsed = JSON.parse(outputRaw);
+            if (parsed && typeof parsed === "object") {
+              if (tool === "memory_pending_bulk_confirm") {
+                summary = `已確認 ${Number(parsed.confirmed || 0)}，略過衝突 ${Number(parsed.skipped_conflicts || 0)}`;
+              } else if (tool === "memory_conflict_resolve") {
+                summary = String(parsed.action || "處理衝突");
+              }
+            }
+          }
+        } catch (_) {
+          // ignore parse errors
+        }
+        item.textContent = `${ts} ・${tool} ・${status}${summary ? ` ・${summary}` : ""}`;
+        petMemoryHistoryList.appendChild(item);
+      });
+    }
+
+    async function petLoadMemoryGovernanceHistory() {
+      if (!petHasCloudSession()) {
+        petMemoryGovernanceEvents = [];
+        petRenderMemoryGovernanceHistory();
+        return;
+      }
+      try {
+        const data = await petAgentApi("/agent/memory-governance/history?limit=20");
+        const rows = Array.isArray(data.events) ? data.events : [];
+        petMemoryGovernanceEvents = rows;
+      } catch (err) {
+        console.warn("[pet] load memory governance history failed:", err);
+      }
+      petRenderMemoryGovernanceHistory();
+    }
+
+    async function petLogMemoryGovernanceEvent(toolName, status, inputObj, outputObj, errorText = "") {
+      if (!petHasCloudSession()) {
+        return;
+      }
+      try {
+        await petAgentApi("/agent/tool-logs", {
+          method: "POST",
+          body: JSON.stringify({
+            tool_name: String(toolName || "memory_event").slice(0, 80),
+            status: status || "success",
+            input: JSON.stringify(inputObj || {}, null, 0),
+            output: JSON.stringify(outputObj || {}, null, 0),
+            error: String(errorText || "").slice(0, 500),
+            latency_ms: 0,
+          }),
+        });
+      } catch (err) {
+        console.warn("[pet] log governance event failed:", err);
+      }
+    }
+
+    async function petConfirmAllPendingMemories() {
+      if (!petHasCloudSession()) {
+        alert("請先登入，才能批次確認記憶。");
+        return;
+      }
+      if (!window.confirm("要批次確認待確認記憶嗎？（有衝突的記憶會被略過）")) {
+        return;
+      }
+      try {
+        const data = await petAgentApi("/agent/memories/confirm-pending", {
+          method: "POST",
+          body: JSON.stringify({ limit: 30 }),
+        });
+        const confirmed = Array.isArray(data.confirmed_ids) ? data.confirmed_ids.length : 0;
+        const skipped = Array.isArray(data.skipped_conflict_ids) ? data.skipped_conflict_ids.length : 0;
+        const failed = Array.isArray(data.failed_ids) ? data.failed_ids.length : 0;
+        await petLoadMemories(true);
+        if (petMemoryHistoryOpen) {
+          await petLoadMemoryGovernanceHistory();
+        }
+        alert(`批次確認完成：已確認 ${confirmed} 筆，略過衝突 ${skipped} 筆，失敗 ${failed} 筆。`);
+      } catch (err) {
+        alert("批次確認失敗，請稍後再試。");
+      }
+    }
+
+    async function petCreateMemoryByUser() {
+      if (!petHasCloudSession()) {
+        alert("請先登入，才能建立可同步的記憶。");
+        return;
+      }
+      const content = window.prompt("要記住什麼？（請寫具體、可驗證，至少 8 字）", "");
+      if (content === null) {
+        return;
+      }
+      if (!petMeaningfulMemory(content)) {
+        alert("記憶內容太短或太空泛，請至少 8 字並包含具體資訊。");
+        return;
+      }
+      const kindInput = window.prompt("記憶類型（人物背景/偏好/限制/目標/事件/洞察）", "洞察");
+      if (kindInput === null) {
+        return;
+      }
+      const kind = petNormalizeMemoryKind(kindInput);
+
+      try {
+        await petAgentApi("/agent/memories", {
+          method: "POST",
+          body: JSON.stringify({
+            kind,
+            content: String(content || "").trim(),
+            source: "manual_curation",
+            pending: false,
+          }),
+        });
+        await petLoadMemories(true);
+      } catch (err) {
+        alert("新增記憶失敗，請稍後再試。");
+      }
+    }
+
+    async function petEditMemory(memoryId) {
+      const target = petAgentMemories.find((row) => row.id === memoryId);
+      if (!target) {
+        return;
+      }
+      const content = window.prompt("編輯記憶內容（至少 8 字）", target.content || "");
+      if (content === null) {
+        return;
+      }
+      if (!petMeaningfulMemory(content)) {
+        alert("記憶內容太短或太空泛，請至少 8 字並包含具體資訊。");
+        return;
+      }
+      const kindInput = window.prompt("記憶類型（人物背景/偏好/限制/目標/事件/洞察）", petMemoryKindLabel(target.kind || "insight"));
+      if (kindInput === null) {
+        return;
+      }
+      const kind = petNormalizeMemoryKind(kindInput);
+
+      try {
+        await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            content: String(content || "").trim(),
+            kind,
+            pending: false,
+          }),
+        });
+        await petLoadMemories(true);
+      } catch (err) {
+        alert("編輯記憶失敗，請稍後再試。");
+      }
+    }
+
+    async function petConfirmMemory(memoryId) {
+      try {
+        await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            confirm_pending: true,
+          }),
+        });
+        await petLoadMemories(true);
+      } catch (err) {
+        alert("確認記憶失敗，請稍後再試。");
+      }
+    }
+
+    function petMemoryUserTags(tagsRaw) {
+      const tags = Array.isArray(tagsRaw) ? tagsRaw : [];
+      return tags
+        .map((item) => String(item || "").trim())
+        .filter((item) => item && item !== "__pending__" && item !== "__confirmed__" && item !== "__conflict__");
+    }
+
+    async function petResolveMemoryConflict(memoryId) {
+      const target = petAgentMemories.find((row) => row.id === memoryId);
+      if (!target) {
+        return;
+      }
+
+      let conflictRows = [];
+      try {
+        const data = await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}/conflicts`);
+        conflictRows = Array.isArray(data.conflicts) ? data.conflicts : [];
+      } catch (err) {
+        alert("讀取衝突資訊失敗，請稍後再試。");
+        return;
+      }
+
+      if (!conflictRows.length) {
+        try {
+          await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              tags: petMemoryUserTags(target.tags),
+              confirm_pending: true,
+            }),
+          });
+          await petLoadMemories(true);
+          alert("目前已無衝突，已自動清除衝突標記。");
+        } catch (err) {
+          alert("清除衝突標記失敗，請稍後再試。");
+        }
+        return;
+      }
+
+      const summary = conflictRows
+        .slice(0, 3)
+        .map((row, idx) => `${idx + 1}. ${String(row.content || "").slice(0, 28)}`)
+        .join("\n");
+      const action = window.prompt(
+        `偵測到 ${conflictRows.length} 筆衝突，請選擇處理方式：\n1 保留新版\n2 保留舊版\n3 合併\n\n衝突樣本：\n${summary}`,
+        "1"
+      );
+      if (action === null) {
+        return;
+      }
+
+      const picked = conflictRows[0];
+
+      try {
+        if (action.trim() === "1") {
+          await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              tags: petMemoryUserTags(target.tags),
+              confirm_pending: true,
+            }),
+          });
+          if (picked && picked.id) {
+            await petAgentApi(`/agent/memories/${encodeURIComponent(String(picked.id))}`, {
+              method: "DELETE",
+            });
+          }
+          await petLogMemoryGovernanceEvent("memory_conflict_resolve", "success", { memory_id: memoryId }, { action: "keep_new" });
+        } else if (action.trim() === "2") {
+          if (!window.confirm("將刪除新版記憶並保留舊版，確定嗎？")) {
+            return;
+          }
+          await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+            method: "DELETE",
+          });
+          await petLogMemoryGovernanceEvent("memory_conflict_resolve", "success", { memory_id: memoryId }, { action: "keep_old" });
+        } else if (action.trim() === "3") {
+          const merged = window.prompt("請輸入合併後內容（至少 8 字）", `${String(picked.content || "")}；${String(target.content || "")}`);
+          if (merged === null) {
+            return;
+          }
+          if (!petMeaningfulMemory(merged)) {
+            alert("合併內容太短或太空泛，請補充具體資訊。");
+            return;
+          }
+          await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              content: String(merged || "").trim(),
+              tags: petMemoryUserTags(target.tags),
+              confirm_pending: true,
+            }),
+          });
+          if (picked && picked.id && window.confirm("是否一併刪除舊版衝突記憶？")) {
+            await petAgentApi(`/agent/memories/${encodeURIComponent(String(picked.id))}`, {
+              method: "DELETE",
+            });
+          }
+          await petLogMemoryGovernanceEvent("memory_conflict_resolve", "success", { memory_id: memoryId }, { action: "merge" });
+        } else {
+          alert("未執行：請輸入 1、2 或 3。");
+          return;
+        }
+        await petLoadMemories(true);
+        if (petMemoryHistoryOpen) {
+          await petLoadMemoryGovernanceHistory();
+        }
+      } catch (err) {
+        await petLogMemoryGovernanceEvent("memory_conflict_resolve", "error", { memory_id: memoryId }, { action: "unknown" }, String(err && err.message ? err.message : err));
+        alert("處理衝突失敗，請稍後再試。");
+      }
+    }
+
+    async function petDeleteMemory(memoryId) {
+      if (!window.confirm("確定刪除這筆記憶嗎？")) {
+        return;
+      }
+      try {
+        await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+          method: "DELETE",
+        });
+        await petLoadMemories(true);
+      } catch (err) {
+        alert("刪除記憶失敗，請稍後再試。");
+      }
+    }
+
     async function petSupabaseListSessions(limit = 60, offset = 0) {
       if (!supabaseClient || !petHasCloudSession()) {
         throw new Error("supabase_not_ready");
@@ -3441,6 +4426,8 @@
     function petHandleAuthStateChange() {
       petCloudHealthy = true;
       petSessionsLoadedUserKey = "";
+      petMemoriesLoadedUserKey = "";
+      petMemoryGovernanceEvents = [];
       petSessions = [];
       petCurrentSessionId = "";
       petHistory = [];
@@ -3455,12 +4442,20 @@
         }
       }
       petEnsureSessionReady(true);
+      if (petMemoryPanelOpen) {
+        void petLoadMemories(true);
+      } else {
+        petRenderMemoryList();
+      }
     }
 
     async function petOpen() {
       petPanel.classList.add("open");
       petInput.focus();
       await petEnsureSessionReady(false);
+      if (petMemoryPanelOpen) {
+        await petLoadMemories(false);
+      }
       if (petMessages.children.length === 0) {
         petRenderMessagesFromHistory();
       }
@@ -3474,6 +4469,10 @@
       void petOpen();
     });
     petClose.addEventListener("click", petClose_);
+    if (petResizeBtn) {
+      petResizeBtn.addEventListener("click", petTogglePanelExpanded);
+    }
+    window.addEventListener("resize", petApplyCustomSize);
 
     // Esc 關閉
     document.addEventListener("keydown", (e) => {
@@ -3722,8 +4721,90 @@
       }
     });
 
+    if (petMemoryToggleBtn && petMemoryPanel) {
+      petMemoryToggleBtn.addEventListener("click", async () => {
+        petMemoryPanelOpen = !petMemoryPanelOpen;
+        petMemoryPanel.classList.toggle("open", petMemoryPanelOpen);
+        petMemoryToggleBtn.textContent = petMemoryPanelOpen ? "收起記憶庫" : "記憶庫（可編輯）";
+        if (petMemoryPanelOpen) {
+          await petLoadMemories(false);
+          if (petMemoryHistoryOpen) {
+            await petLoadMemoryGovernanceHistory();
+          }
+        }
+      });
+    }
+
+    if (petMemoryConfirmAllBtn) {
+      petMemoryConfirmAllBtn.addEventListener("click", async () => {
+        await petConfirmAllPendingMemories();
+      });
+    }
+
+    if (petMemoryHistoryToggleBtn) {
+      petMemoryHistoryToggleBtn.addEventListener("click", async () => {
+        petMemoryHistoryOpen = !petMemoryHistoryOpen;
+        if (petMemoryHistoryBox) {
+          petMemoryHistoryBox.style.display = petMemoryHistoryOpen ? "block" : "none";
+        }
+        petMemoryHistoryToggleBtn.textContent = petMemoryHistoryOpen ? "隱藏歷史" : "歷史";
+        if (petMemoryHistoryOpen) {
+          await petLoadMemoryGovernanceHistory();
+        }
+      });
+    }
+
+    if (petMemoryRefreshBtn) {
+      petMemoryRefreshBtn.addEventListener("click", async () => {
+        await petLoadMemories(true);
+      });
+    }
+
+    if (petMemoryAddBtn) {
+      petMemoryAddBtn.addEventListener("click", async () => {
+        await petCreateMemoryByUser();
+      });
+    }
+
+    if (petMemoryList) {
+      petMemoryList.addEventListener("click", async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const btn = target.closest("button[data-action]");
+        if (!btn) {
+          return;
+        }
+        const action = btn.getAttribute("data-action") || "";
+        const memoryId = btn.getAttribute("data-memory-id") || "";
+        if (!memoryId) {
+          return;
+        }
+        if (action === "edit-memory") {
+          await petEditMemory(memoryId);
+          return;
+        }
+        if (action === "confirm-memory") {
+          await petConfirmMemory(memoryId);
+          return;
+        }
+        if (action === "resolve-conflict") {
+          await petResolveMemoryConflict(memoryId);
+          return;
+        }
+        if (action === "delete-memory") {
+          await petDeleteMemory(memoryId);
+        }
+      });
+    }
+
     // 掃描進行中啟用勿擾，掃描後帶入情緒並關閉勿擾
     const _origStartAutoScan = startAutoScan;
+    petLoadPanelExpandedState();
+    petLoadPanelCustomSize();
+    petInitPanelResizeHandle();
+    petBindMemoryFilters();
     // 利用 finalizeScan 完成後更新情緒上下文
     const _origFinalizeScan = finalizeScan;
     // 覆寫 finalizeScan 以注入桌寵情緒更新
