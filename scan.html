@@ -4539,6 +4539,7 @@
           reply = data.reply || data.fallback || reply;
           const toolResults = Array.isArray(data.tool_results) ? data.tool_results : [];
           const touchedMemory = toolResults.some((tool) => tool && tool.name === "remember_memory" && tool.status === "success");
+          const memorySuccessRows = toolResults.filter((tool) => tool && tool.name === "remember_memory" && tool.status === "success");
           const memoryConflictDetected = toolResults.some((tool) => {
             if (!tool || tool.name !== "remember_memory" || tool.status !== "success") {
               return false;
@@ -4565,6 +4566,8 @@
           }
           if (memoryConflictDetected) {
             reply += "\n\n我發現這則記憶和舊資料可能衝突了。要不要現在打開記憶庫，點「處理衝突」幫你決定保留新版、舊版或合併？";
+          } else if (memorySuccessRows.length > 0) {
+            reply += "\n\n我先幫你把這點記下來了。";
           }
         } else {
           const data = await res.json().catch(() => ({}));
