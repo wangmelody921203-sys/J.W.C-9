@@ -223,6 +223,39 @@ create index if not exists agent_tool_logs_user_created_idx
 - `POST /agent/tool-logs`：記錄工具呼叫
 - `GET /agent/tool-logs`：讀取工具呼叫紀錄
 
+### Agent Step 7（可觀測 + 回歸測試）
+
+`/generate` 現在每一回合都會回傳 `observability`，包含：
+
+- `used_memories` / `used_memory_count`
+- `used_tools` / `used_tool_count`
+- `latency_ms`
+- `fallback_used` / `fallback_reason`
+- `safety_mode` / `crisis_level` / `crisis_phase`
+
+若使用者已登入（有 bearer token），後端也會把每回合摘要寫入 `agent_tool_logs`：
+
+- `tool_name = turn_observability`
+
+可直接用 `GET /agent/tool-logs` 檢視每回合品質趨勢。
+
+#### 固定 20 條回歸測試
+
+- 測試案例檔：`regression/agent_regression_cases.json`
+- 執行腳本：`regression/run_regression.py`
+
+執行方式：
+
+```powershell
+# 選填：測已登入路徑（工具呼叫/記憶/任務）
+$env:AGENT_BEARER_TOKEN = "<your_token>"
+
+# 選填：預設是 http://127.0.0.1:8000
+$env:AGENT_BASE_URL = "http://127.0.0.1:8000"
+
+& ".venv/Scripts/python.exe" regression/run_regression.py
+```
+
 ### 啟用方式
 
 1. 在 Render Dashboard 的環境變數設定 `GROQ_API_KEY=你的金鑰`（金鑰**不可**放入程式碼或 git）。

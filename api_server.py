@@ -2811,6 +2811,74 @@ def _agent_log_tool_execution(*, supabase_url: str, service_key: str, user_id: s
     )
 
 
+def _agent_build_turn_observability(
+    *,
+    memories_rows: list[dict],
+    tool_results: list[dict],
+    latency_ms: int,
+    fallback_used: bool,
+    fallback_reason: str = "",
+    safety_mode: str = "normal",
+    crisis_level: str = "none",
+    crisis_phase: str = "none",
+) -> dict:
+    used_memories = []
+    for row in memories_rows[:5]:
+        used_memories.append(
+            {
+                "id": str(row.get("id", "")).strip(),
+                "kind": str(row.get("kind", "insight")).strip() or "insight",
+            }
+        )
+
+    used_tools = []
+    for item in tool_results:
+        used_tools.append(
+            {
+                "name": str(item.get("name", "unknown")).strip() or "unknown",
+                "status": str(item.get("status", "success")).strip() or "success",
+            }
+        )
+
+    return {
+        "used_memories": used_memories,
+        "used_memory_count": len(memories_rows),
+        "used_tools": used_tools,
+        "used_tool_count": len(tool_results),
+        "latency_ms": max(0, int(latency_ms)),
+        "fallback_used": bool(fallback_used),
+        "fallback_reason": str(fallback_reason or "").strip(),
+        "safety_mode": str(safety_mode or "normal").strip() or "normal",
+        "crisis_level": str(crisis_level or "none").strip() or "none",
+        "crisis_phase": str(crisis_phase or "none").strip() or "none",
+    }
+
+
+def _agent_log_turn_observability(
+    *,
+    supabase_url: str,
+    service_key: str,
+    user_id: str,
+    observability: dict,
+    user_text: str,
+) -> None:
+    if not user_id or not supabase_url or not service_key:
+        return
+    fallback_used = bool(observability.get("fallback_used", False))
+    fallback_reason = str(observability.get("fallback_reason", "")).strip()
+    _agent_log_tool_execution(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        tool_name="turn_observability",
+        status="error" if fallback_used else "success",
+        input_text=json.dumps({"text": _agent_short_text(user_text, 300)}, ensure_ascii=False),
+        output_text=json.dumps(observability, ensure_ascii=False),
+        error_text=fallback_reason if fallback_used else "",
+        latency_ms=int(observability.get("latency_ms", 0) or 0),
+    )
+
+
 def _agent_pick_tool_calls(last_user_text: str) -> list[dict]:
     text = str(last_user_text or "").strip()
     lowered = text.lower()
@@ -2995,9 +3063,21 @@ def generate():
     - emotion 必須在白名單內，否則拒絕（防提示注入）。
     - 每個 IP 每小時限 30 次。
     """
+    request_started = time.perf_counter()
     ip = request.remote_addr or "unknown"
     if not _check_rate(ip):
-        return jsonify({"error": "rate_limit", "fallback": "我需要稍微休息一下，等等再來找我吧 🌙"}), 429
+        observability = _agent_build_turn_observability(
+            memories_rows=[],
+            tool_results=[],
+            latency_ms=int((time.perf_counter() - request_started) * 1000),
+            fallback_used=True,
+            fallback_reason="rate_limit",
+        )
+        return jsonify({
+            "error": "rate_limit",
+            "fallback": "我需要稍微休息一下，等等再來找我吧 🌙",
+            "observability": observability,
+        }), 429
 
     payload = request.get_json(silent=True) or {}
     supabase_url, service_key, user_id = _resolve_authed_user()
@@ -3015,7 +3095,14 @@ def generate():
 
     client = _get_groq_client()
     if client is None:
-        return jsonify({"error": "groq_unavailable", "fallback": fallback_reply}), 503
+        observability = _agent_build_turn_observability(
+            memories_rows=[],
+            tool_results=[],
+            latency_ms=int((time.perf_counter() - request_started) * 1000),
+            fallback_used=True,
+            fallback_reason="groq_unavailable",
+        )
+        return jsonify({"error": "groq_unavailable", "fallback": fallback_reply, "observability": observability}), 503
 
     # 驗證 messages：只取 role/content，限長度
     raw_messages = payload.get("messages", [])
@@ -3035,7 +3122,14 @@ def generate():
         clean_messages.append({"role": role, "content": content})
 
     if not clean_messages:
-        return jsonify({"error": "empty_messages", "fallback": "你好，我在這裡，有什麼想說的嗎？"}), 400
+        observability = _agent_build_turn_observability(
+            memories_rows=[],
+            tool_results=[],
+            latency_ms=int((time.perf_counter() - request_started) * 1000),
+            fallback_used=True,
+            fallback_reason="empty_messages",
+        )
+        return jsonify({"error": "empty_messages", "fallback": "你好，我在這裡，有什麼想說的嗎？", "observability": observability}), 400
 
     last_user_text = ""
     for m in reversed(clean_messages):
@@ -3060,6 +3154,16 @@ def generate():
             previous_assistant=last_assistant_text,
             phase=crisis_phase,
         )
+        observability = _agent_build_turn_observability(
+            memories_rows=[],
+            tool_results=[],
+            latency_ms=int((time.perf_counter() - request_started) * 1000),
+            fallback_used=False,
+            fallback_reason="",
+            safety_mode="crisis",
+            crisis_level=str(crisis_info.get("level", "medium")),
+            crisis_phase=crisis_phase,
+        )
         if user_id and supabase_url and service_key:
             _agent_log_tool_execution(
                 supabase_url=supabase_url,
@@ -3072,6 +3176,13 @@ def generate():
                 error_text="",
                 latency_ms=0,
             )
+            _agent_log_turn_observability(
+                supabase_url=supabase_url,
+                service_key=service_key,
+                user_id=user_id,
+                observability=observability,
+                user_text=last_user_text,
+            )
         return jsonify({
             "reply": safe_reply,
             "emotion": emotion,
@@ -3080,6 +3191,7 @@ def generate():
             "safety_mode": "crisis",
             "crisis_level": crisis_info.get("level", "medium"),
             "crisis_phase": crisis_phase,
+            "observability": observability,
         })
 
     # 在 system prompt 後插入當次情緒脈絡（結構化，不直接拼接用戶輸入）
@@ -3270,17 +3382,59 @@ def generate():
 
     if not reply and last_error is not None:
         app.logger.exception("Groq generate failed", exc_info=last_error)
+        observability = _agent_build_turn_observability(
+            memories_rows=memories_rows,
+            tool_results=tool_results,
+            latency_ms=int((time.perf_counter() - request_started) * 1000),
+            fallback_used=True,
+            fallback_reason="groq_error",
+        )
+        if user_id and supabase_url and service_key:
+            _agent_log_turn_observability(
+                supabase_url=supabase_url,
+                service_key=service_key,
+                user_id=user_id,
+                observability=observability,
+                user_text=last_user_text,
+            )
         fallback_payload = {
             "error": "groq_error",
             "fallback": fallback_reply,
             "tool_results": tool_results,
+            "observability": observability,
         }
         return jsonify(fallback_payload), 500
 
+    fallback_used = False
+    fallback_reason = ""
     if not reply:
         reply = fallback_reply
+        fallback_used = True
+        fallback_reason = "empty_reply"
 
-    return jsonify({"reply": reply, "emotion": emotion, "persona": persona, "tool_results": tool_results})
+    observability = _agent_build_turn_observability(
+        memories_rows=memories_rows,
+        tool_results=tool_results,
+        latency_ms=int((time.perf_counter() - request_started) * 1000),
+        fallback_used=fallback_used,
+        fallback_reason=fallback_reason,
+    )
+    if user_id and supabase_url and service_key:
+        _agent_log_turn_observability(
+            supabase_url=supabase_url,
+            service_key=service_key,
+            user_id=user_id,
+            observability=observability,
+            user_text=last_user_text,
+        )
+
+    return jsonify({
+        "reply": reply,
+        "emotion": emotion,
+        "persona": persona,
+        "tool_results": tool_results,
+        "observability": observability,
+    })
 
 
 @app.post("/feedback")
