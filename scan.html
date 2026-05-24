@@ -4320,17 +4320,24 @@
       if (!supabaseClient || !petHasCloudSession()) {
         throw new Error("supabase_not_ready");
       }
+      const targetSessionId = String(sessionId || "").trim();
+      if (!targetSessionId || targetSessionId.startsWith("local-")) {
+        throw new Error("invalid_cloud_session_id");
+      }
       const userId = petGetUserKey();
+      if (!userId) {
+        throw new Error("missing_user_id");
+      }
       await supabaseClient
         .from("chat_messages")
         .delete()
         .eq("user_id", userId)
-        .eq("session_id", sessionId);
+        .eq("session_id", targetSessionId);
       const { error } = await supabaseClient
         .from("chat_sessions")
         .delete()
         .eq("user_id", userId)
-        .eq("id", sessionId);
+        .eq("id", targetSessionId);
       if (error) {
         throw error;
       }
@@ -4413,14 +4420,12 @@
       await petSupabaseSaveMessage(role, content);
     }
 
-    async function petDeleteCurrentCloudSession() {
-      if (!petCanUseCloud() || !petCurrentSessionId) {
+    async function petDeleteCloudSessionById(sessionId) {
+      const targetSessionId = String(sessionId || "").trim();
+      if (!petCanUseCloud() || !targetSessionId || targetSessionId.startsWith("local-")) {
         return;
       }
-      if (!window.confirm("確定要刪除這個聊天室嗎？刪除後無法復原。")) {
-        return;
-      }
-      await petSupabaseDeleteSession(petCurrentSessionId);
+      await petSupabaseDeleteSession(targetSessionId);
       await petLoadCloudSessions(true);
     }
 
@@ -4734,20 +4739,27 @@
     });
 
     petSessionDeleteBtn.addEventListener("click", async () => {
+      const targetId = String(petCurrentSessionId || "").trim();
+      if (!targetId) {
+        return;
+      }
       if (!window.confirm("確定要刪除這個聊天室嗎？")) {
         return;
       }
-      // 先刪除本地會話（立即可用）
-      petDeleteCurrentLocalSession();
-      // 若登入且雲端可用，嘗試同步刪除（背景進行，不阻擋 UI）
-      if (petCanUseCloud()) {
+
+      // 雲端會話只刪指定目標，避免先刪本地後誤刪到下一個會話。
+      if (petCanUseCloud() && !targetId.startsWith("local-")) {
         try {
-          await petDeleteCurrentCloudSession();
+          await petDeleteCloudSessionById(targetId);
         } catch (err) {
-          console.warn("[pet] cloud session deletion failed, but local deleted:", err);
-          // 雲端失敗，本地已刪除
+          console.warn("[pet] cloud session deletion failed:", err);
+          petAppend("pet", "聊天室刪除失敗，已停止操作避免誤刪。請稍後再試。", "crisis-note");
         }
+        return;
       }
+
+      // 本機會話走本機刪除。
+      petDeleteCurrentLocalSession();
     });
 
     if (petMemoryToggleBtn && petMemoryPanel) {
