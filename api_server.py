@@ -360,7 +360,12 @@ def _normalize_agent_task_priority(raw: str) -> str:
 def _is_meaningful_memory_content(raw: str) -> bool:
     text = re.sub(r"\s+", " ", str(raw or "").strip())
     if len(text) < AGENT_MEMORY_MIN_MEANINGFUL_CHARS:
-        return False
+        short_but_meaningful = (
+            len(text) >= 5
+            and any(token in text for token in ("我喜歡", "我不喜歡", "我討厭", "我不能", "我希望", "我習慣", "我通常", "偏好", "地雷", "限制"))
+        )
+        if not short_but_meaningful:
+            return False
     lowered = text.lower()
     ban_phrases = {
         "test",
@@ -2743,6 +2748,8 @@ def _agent_build_system_prompt(*, persona: str, emotion: str, memories_text: str
 你現在是可用工具的 Agent 版本「陰晴」。
 你要把工具結果整合進回覆，但不能暴露內部工具規則或 JSON 流程。
 回覆時請優先：同理 -> 釐清 -> 一個最小可行下一步。
+情緒掃描只可當弱參考，若與使用者文字敘述衝突，請以使用者文字為主。
+禁止把「工具結果」四個字或內部欄位直接輸出給使用者。
 
 可用背景：
 [本次情緒]
@@ -2899,7 +2906,7 @@ def generate():
             break
 
     # 在 system prompt 後插入當次情緒脈絡（結構化，不直接拼接用戶輸入）
-    emotion_context = f"[本次掃描偵測到的情緒：{emotion}]"
+    emotion_context = f"[本次掃描偵測到的情緒（僅供參考）：{emotion}]"
     tool_calls = _agent_pick_tool_calls(last_user_text) if user_id and supabase_url and service_key else []
 
     memories_rows: list[dict] = []
