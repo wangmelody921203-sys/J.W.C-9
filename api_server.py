@@ -416,13 +416,29 @@ def _agent_build_memory_tags(tags_raw: list | None, *, pending: bool) -> list[st
 
 def _agent_memory_tokens(raw: str) -> set[str]:
     text = str(raw or "").lower()
-    chunks = re.findall(r"[\w\u4e00-\u9fff]+", text)
     tokens: set[str] = set()
-    for chunk in chunks:
-        value = chunk.strip()
+
+    # Latin words
+    for word in re.findall(r"[a-z0-9_]{2,}", text):
+        tokens.add(word[:32])
+
+    # Chinese phrases -> bigrams/trigrams for overlap detection.
+    for seq in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        value = seq.strip()
         if len(value) < 2:
             continue
-        tokens.add(value[:32])
+        if len(value) <= 3:
+            tokens.add(value)
+            continue
+        for i in range(0, len(value) - 1):
+            tokens.add(value[i:i + 2])
+        for i in range(0, len(value) - 2):
+            tokens.add(value[i:i + 3])
+
+    # Fallback: compact fingerprint segment for very short text.
+    compact = _agent_memory_fingerprint(text)
+    if compact and len(compact) >= 4:
+        tokens.add(compact[:24])
     return tokens
 
 
@@ -433,6 +449,14 @@ def _agent_memory_polarity(raw: str) -> int:
     score = 0
     for token in pos_tokens:
         if token in text:
+            if token == "喜歡" and "不喜歡" in text:
+                continue
+            if token == "可以" and "不可以" in text:
+                continue
+            if token == "會" and "不會" in text:
+                continue
+            if token == "要" and "不要" in text:
+                continue
             score += 1
     for token in neg_tokens:
         if token in text:

@@ -4385,8 +4385,32 @@
           reply = data.reply || data.fallback || reply;
           const toolResults = Array.isArray(data.tool_results) ? data.tool_results : [];
           const touchedMemory = toolResults.some((tool) => tool && tool.name === "remember_memory" && tool.status === "success");
+          const memoryConflictDetected = toolResults.some((tool) => {
+            if (!tool || tool.name !== "remember_memory" || tool.status !== "success") {
+              return false;
+            }
+            let payload = null;
+            if (tool.output && typeof tool.output === "object") {
+              payload = tool.output;
+            } else if (typeof tool.output === "string") {
+              try {
+                payload = JSON.parse(tool.output);
+              } catch (_) {
+                payload = null;
+              }
+            }
+            if (!payload || typeof payload !== "object") {
+              return false;
+            }
+            const conflicts = Array.isArray(payload.conflicts) ? payload.conflicts : [];
+            const memory = payload.memory && typeof payload.memory === "object" ? payload.memory : null;
+            return conflicts.length > 0 || Boolean(memory && memory.conflict);
+          });
           if (touchedMemory && petMemoryPanelOpen) {
             void petLoadMemories(true);
+          }
+          if (memoryConflictDetected) {
+            reply += "\n\n我發現這則記憶和舊資料可能衝突了。要不要現在打開記憶庫，點「處理衝突」幫你決定保留新版、舊版或合併？";
           }
         } else {
           const data = await res.json().catch(() => ({}));
