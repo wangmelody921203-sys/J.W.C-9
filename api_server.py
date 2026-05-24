@@ -1984,14 +1984,14 @@ def _agent_pick_tool_calls(last_user_text: str) -> list[dict]:
     wants_moods = any(keyword in text for keyword in ("最近", "近幾天", "近七天", "情緒", "心情", "狀態", "趨勢", "波動"))
     wants_list_tasks = any(keyword in text for keyword in ("有哪些待辦", "列出待辦", "列出任務", "目前任務", "我的任務"))
 
-        if wants_moods:
-                calls.append({"name": "get_recent_moods", "arguments": {"limit": 7}})
-        if wants_list_tasks:
-                calls.append({"name": "list_open_tasks", "arguments": {"limit": 8}})
-        elif wants_tasks:
-                calls.append({"name": "create_task", "arguments": {"title": text, "details": text, "priority": "normal"}})
-        if wants_memory:
-                calls.append({"name": "remember_memory", "arguments": {"content": text, "kind": "insight"}})
+    if wants_moods:
+        calls.append({"name": "get_recent_moods", "arguments": {"limit": 7}})
+    if wants_list_tasks:
+        calls.append({"name": "list_open_tasks", "arguments": {"limit": 8}})
+    elif wants_tasks:
+        calls.append({"name": "create_task", "arguments": {"title": text, "details": text, "priority": "normal"}})
+    if wants_memory:
+        calls.append({"name": "remember_memory", "arguments": {"content": text, "kind": "insight"}})
 
     deduped: list[dict] = []
     seen: set[str] = set()
