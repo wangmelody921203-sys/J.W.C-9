@@ -3056,6 +3056,17 @@
       return PET_MEMORY_KIND_LABELS[petNormalizeMemoryKind(kind)] || "洞察";
     }
 
+    function petMemoryIsPending(memory) {
+      if (!memory || typeof memory !== "object") {
+        return false;
+      }
+      if (memory.pending === true) {
+        return true;
+      }
+      const tags = Array.isArray(memory.tags) ? memory.tags : [];
+      return tags.includes("__pending__");
+    }
+
     function petMeaningfulMemory(text) {
       const value = String(text || "").trim();
       if (value.length < 8) {
@@ -3412,7 +3423,8 @@
         const kind = String(memory.kind || "insight");
         const kindLabel = petMemoryKindLabel(kind);
         const importance = Number(memory.importance || 50);
-        meta.textContent = `${kindLabel} ・重要度 ${importance}`;
+        const pending = petMemoryIsPending(memory);
+        meta.textContent = `${kindLabel} ・${pending ? "待確認" : "已確認"} ・分數 ${importance}`;
 
         const content = document.createElement("div");
         content.className = "pet-memory-content";
@@ -3434,6 +3446,16 @@
         delBtn.textContent = "刪除";
         delBtn.setAttribute("data-action", "delete-memory");
         delBtn.setAttribute("data-memory-id", id);
+
+        if (pending) {
+          const confirmBtn = document.createElement("button");
+          confirmBtn.className = "pet-memory-action";
+          confirmBtn.type = "button";
+          confirmBtn.textContent = "確認";
+          confirmBtn.setAttribute("data-action", "confirm-memory");
+          confirmBtn.setAttribute("data-memory-id", id);
+          actions.appendChild(confirmBtn);
+        }
 
         actions.appendChild(editBtn);
         actions.appendChild(delBtn);
@@ -3467,6 +3489,7 @@
             content: String(row.content || "").trim(),
             importance: Number(row.importance || 50),
             tags: Array.isArray(row.tags) ? row.tags : [],
+            pending: Boolean(row.pending),
           }))
           .filter((row) => row.content);
         petMemoriesLoadedUserKey = userKey;
@@ -3494,15 +3517,6 @@
         return;
       }
       const kind = petNormalizeMemoryKind(kindInput);
-      const importanceRaw = window.prompt("重要度（0-100）", "70");
-      if (importanceRaw === null) {
-        return;
-      }
-      let importance = Number.parseInt(importanceRaw, 10);
-      if (!Number.isFinite(importance)) {
-        importance = 70;
-      }
-      importance = Math.max(0, Math.min(100, importance));
 
       try {
         await petAgentApi("/agent/memories", {
@@ -3510,8 +3524,8 @@
           body: JSON.stringify({
             kind,
             content: String(content || "").trim(),
-            importance,
             source: "manual_curation",
+            pending: false,
           }),
         });
         await petLoadMemories(true);
@@ -3538,15 +3552,6 @@
         return;
       }
       const kind = petNormalizeMemoryKind(kindInput);
-      const importanceRaw = window.prompt("重要度（0-100）", String(target.importance || 50));
-      if (importanceRaw === null) {
-        return;
-      }
-      let importance = Number.parseInt(importanceRaw, 10);
-      if (!Number.isFinite(importance)) {
-        importance = Number(target.importance || 50);
-      }
-      importance = Math.max(0, Math.min(100, importance));
 
       try {
         await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
@@ -3554,12 +3559,26 @@
           body: JSON.stringify({
             content: String(content || "").trim(),
             kind,
-            importance,
+            pending: false,
           }),
         });
         await petLoadMemories(true);
       } catch (err) {
         alert("編輯記憶失敗，請稍後再試。");
+      }
+    }
+
+    async function petConfirmMemory(memoryId) {
+      try {
+        await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            confirm_pending: true,
+          }),
+        });
+        await petLoadMemories(true);
+      } catch (err) {
+        alert("確認記憶失敗，請稍後再試。");
       }
     }
 
@@ -4054,6 +4073,10 @@
       }
       if (action === "edit-memory") {
         await petEditMemory(memoryId);
+        return;
+      }
+      if (action === "confirm-memory") {
+        await petConfirmMemory(memoryId);
         return;
       }
       if (action === "delete-memory") {

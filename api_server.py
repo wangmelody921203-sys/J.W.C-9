@@ -232,6 +232,8 @@ AGENT_MEMORY_MIN_MEANINGFUL_CHARS = 8
 AGENT_TASK_TITLE_LIMIT = 120
 AGENT_TASK_DETAILS_LIMIT = 1500
 AGENT_TOOL_LOG_TEXT_LIMIT = 3000
+_AGENT_TAG_PENDING = "__pending__"
+_AGENT_TAG_CONFIRMED = "__confirmed__"
 _ALLOWED_AGENT_MEMORY_KINDS = {
     "profile",
     "preference",
@@ -371,6 +373,87 @@ def _is_meaningful_memory_content(raw: str) -> bool:
     if lowered in ban_phrases:
         return False
     return True
+
+
+def _agent_memory_fingerprint(raw: str) -> str:
+    text = re.sub(r"\s+", " ", str(raw or "").strip()).lower()
+    return re.sub(r"[^\w]+", "", text)
+
+
+def _agent_is_memory_pending(tags_raw: list | None) -> bool:
+    tags = [str(item or "").strip() for item in (tags_raw or [])]
+    return _AGENT_TAG_PENDING in tags
+
+
+def _agent_build_memory_tags(tags_raw: list | None, *, pending: bool) -> list[str]:
+    tags: list[str] = []
+    for item in (tags_raw or []):
+        value = str(item or "").strip()
+        if not value:
+            continue
+        if value in {_AGENT_TAG_PENDING, _AGENT_TAG_CONFIRMED}:
+            continue
+        tags.append(value[:40])
+    tags.append(_AGENT_TAG_PENDING if pending else _AGENT_TAG_CONFIRMED)
+    return tags
+
+
+def _agent_compute_memory_importance(*, kind: str, content: str, source: str, pending: bool) -> int:
+    kind_weight = {
+        "constraint": 88,
+        "goal": 82,
+        "profile": 74,
+        "preference": 68,
+        "event": 62,
+        "insight": 58,
+    }
+    score = kind_weight.get(kind, 60)
+    text = str(content or "").strip()
+    lowered = text.lower()
+    score += min(12, len(text) // 30)
+    if any(token in text for token in ("每天", "每週", "固定", "總是", "一定", "不可以", "不能")):
+        score += 8
+    if any(token in lowered for token in ("always", "never", "must", "cannot")):
+        score += 6
+    if str(source or "").strip() == "manual_curation":
+        score += 6
+    if pending:
+        score -= 8
+    return max(0, min(100, score))
+
+
+def _agent_infer_memory_kind_from_text(raw: str) -> str:
+    text = str(raw or "").strip()
+    lowered = text.lower()
+    if any(token in text for token in ("我喜歡", "我偏好", "我習慣", "我不喜歡", "我討厭")):
+        return "preference"
+    if any(token in text for token in ("我不能", "不可以", "不要", "禁忌", "地雷", "界線", "限制")):
+        return "constraint"
+    if any(token in text for token in ("我的目標", "我要", "我希望", "我想達成", "計畫")):
+        return "goal"
+    if any(token in text for token in ("我在", "我住", "我今年", "我的身分", "背景")):
+        return "profile"
+    if any(token in text for token in ("昨天", "今天", "上週", "剛剛", "發生", "遇到")):
+        return "event"
+    if any(token in lowered for token in ("i like", "i prefer", "i don't like")):
+        return "preference"
+    if any(token in lowered for token in ("i can't", "cannot", "must not", "boundary")):
+        return "constraint"
+    if any(token in lowered for token in ("my goal", "i want", "i hope", "plan")):
+        return "goal"
+    return "insight"
+
+
+def _agent_should_auto_remember(raw: str) -> bool:
+    text = str(raw or "").strip()
+    if not _is_meaningful_memory_content(text):
+        return False
+    lowered = text.lower()
+    if text.endswith("?") or "？" in text:
+        return False
+    explicit = any(token in text for token in ("記住", "記下", "幫我記", "別忘了", "記錄")) or "remember" in lowered
+    stable = any(token in text for token in ("我喜歡", "我不喜歡", "我不能", "我希望", "我的目標", "我習慣", "我通常", "每天", "每週", "界線", "限制"))
+    return explicit or stable
 
 
 def _resolve_authed_user() -> tuple[str | None, str | None, str | None]:
@@ -1481,7 +1564,14 @@ def agent_memories_list():
     if status != 200:
         return jsonify({"error": "supabase_query_failed", "details": data}), 502
 
-    rows = data if isinstance(data, list) else []
+    rows_raw = data if isinstance(data, list) else []
+    rows = []
+    for row in rows_raw:
+        if not isinstance(row, dict):
+            continue
+        enriched = dict(row)
+        enriched["pending"] = _agent_is_memory_pending(row.get("tags") if isinstance(row.get("tags"), list) else [])
+        rows.append(enriched)
     return jsonify({"ok": True, "memories": rows})
 
 
@@ -1497,7 +1587,7 @@ def agent_memories_create():
         return jsonify({"error": "invalid_token"}), 401
 
     payload = request.get_json(silent=True) or {}
-    kind = _normalize_agent_memory_kind(payload.get("kind", "insight"))
+    kind_input = payload.get("kind", "insight")
     content = str(payload.get("content", "")).strip()
     if not content:
         return jsonify({"error": "empty_content"}), 400
@@ -1506,22 +1596,20 @@ def agent_memories_create():
     if not _is_meaningful_memory_content(content):
         return jsonify({"error": "content_not_meaningful", "min_chars": AGENT_MEMORY_MIN_MEANINGFUL_CHARS}), 400
 
-    importance_raw = payload.get("importance", 50)
-    try:
-        importance = int(importance_raw)
-    except (TypeError, ValueError):
-        importance = 50
-    importance = max(0, min(100, importance))
-
     source = str(payload.get("source", "chat")).strip()[:40] or "chat"
     session_id = str(payload.get("session_id", "")).strip() or None
     tags_raw = payload.get("tags", [])
-    tags = []
+    user_tags: list[str] = []
     if isinstance(tags_raw, list):
         for item in tags_raw:
             value = str(item or "").strip()
             if value:
-                tags.append(value[:40])
+                user_tags.append(value[:40])
+
+    kind = _normalize_agent_memory_kind(kind_input or _agent_infer_memory_kind_from_text(content))
+    pending = bool(payload.get("pending", source != "manual_curation"))
+    tags = _agent_build_memory_tags(user_tags, pending=pending)
+    importance = _agent_compute_memory_importance(kind=kind, content=content, source=source, pending=pending)
 
     now_iso = _utc_now_iso()
     status, data = _supabase_rest_request(
@@ -1557,6 +1645,8 @@ def agent_memories_create():
 
     rows = data if isinstance(data, list) else []
     memory = rows[0] if rows else None
+    if isinstance(memory, dict):
+        memory["pending"] = _agent_is_memory_pending(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
     return jsonify({"ok": True, "memory": memory}), 201
 
 
@@ -1575,6 +1665,25 @@ def agent_memories_update(memory_id: str):
     if not target_id:
         return jsonify({"error": "invalid_memory_id"}), 400
 
+    lookup_status, lookup_data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+            "id": f"eq.{target_id}",
+            "user_id": f"eq.{user_id}",
+            "limit": "1",
+        },
+    )
+    if lookup_status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": lookup_data}), 502
+    current_rows = lookup_data if isinstance(lookup_data, list) else []
+    current = current_rows[0] if current_rows else None
+    if not isinstance(current, dict):
+        return jsonify({"error": "memory_not_found"}), 404
+
     payload = request.get_json(silent=True) or {}
     patch_doc: dict[str, object] = {"updated_at": _utc_now_iso()}
 
@@ -1591,13 +1700,6 @@ def agent_memories_update(memory_id: str):
     if "kind" in payload:
         patch_doc["kind"] = _normalize_agent_memory_kind(payload.get("kind", "insight"))
 
-    if "importance" in payload:
-        try:
-            importance = int(payload.get("importance", 50))
-        except (TypeError, ValueError):
-            importance = 50
-        patch_doc["importance"] = max(0, min(100, importance))
-
     if "tags" in payload:
         tags_raw = payload.get("tags", [])
         tags: list[str] = []
@@ -1607,6 +1709,25 @@ def agent_memories_update(memory_id: str):
                 if value:
                     tags.append(value[:40])
         patch_doc["tags"] = tags
+
+    pending = _agent_is_memory_pending(current.get("tags") if isinstance(current.get("tags"), list) else [])
+    if "confirm_pending" in payload and bool(payload.get("confirm_pending")):
+        pending = False
+    elif "pending" in payload:
+        pending = bool(payload.get("pending"))
+
+    base_tags_raw = patch_doc.get("tags") if isinstance(patch_doc.get("tags"), list) else current.get("tags", [])
+    patch_doc["tags"] = _agent_build_memory_tags(base_tags_raw if isinstance(base_tags_raw, list) else [], pending=pending)
+
+    final_kind = str(patch_doc.get("kind", current.get("kind", "insight")))
+    final_content = str(patch_doc.get("content", current.get("content", "")))
+    final_source = str(current.get("source", "chat"))
+    patch_doc["importance"] = _agent_compute_memory_importance(
+        kind=_normalize_agent_memory_kind(final_kind),
+        content=final_content,
+        source=final_source,
+        pending=pending,
+    )
 
     if len(patch_doc) == 1:
         return jsonify({"error": "no_patch_fields"}), 400
@@ -1630,6 +1751,8 @@ def agent_memories_update(memory_id: str):
     memory = rows[0] if rows else None
     if not memory:
         return jsonify({"error": "memory_not_found"}), 404
+    if isinstance(memory, dict):
+        memory["pending"] = _agent_is_memory_pending(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
     return jsonify({"ok": True, "memory": memory})
 
 
@@ -2012,14 +2135,48 @@ def _agent_list_recent_moods(*, supabase_url: str, service_key: str, user_id: st
     return data if isinstance(data, list) else []
 
 
-def _agent_create_memory(*, supabase_url: str, service_key: str, user_id: str, kind: str, content: str, importance: int = 50, tags: list[str] | None = None, source: str = "agent", session_id: str | None = None) -> tuple[dict | None, str | None]:
+def _agent_create_memory(*, supabase_url: str, service_key: str, user_id: str, kind: str, content: str, tags: list[str] | None = None, source: str = "agent", session_id: str | None = None, pending: bool | None = None) -> tuple[dict | None, str | None]:
+    safe_content = _agent_short_text(content, AGENT_MEMORY_CONTENT_LIMIT)
+    if not _is_meaningful_memory_content(safe_content):
+        return None, "content_not_meaningful"
+
+    safe_kind = _normalize_agent_memory_kind(kind or _agent_infer_memory_kind_from_text(safe_content))
+    is_pending = bool(pending) if pending is not None else (str(source or "").strip() != "manual_curation")
+    safe_tags = _agent_build_memory_tags(tags or [], pending=is_pending)
+    importance = _agent_compute_memory_importance(kind=safe_kind, content=safe_content, source=source, pending=is_pending)
+
+    # Simple duplicate guard: same kind + same normalized content => reuse existing.
+    fp = _agent_memory_fingerprint(safe_content)
+    if fp:
+        lookup_status, lookup_data = _supabase_rest_request(
+            method="GET",
+            path="/rest/v1/agent_memories",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+                "user_id": f"eq.{user_id}",
+                "kind": f"eq.{safe_kind}",
+                "order": "updated_at.desc,created_at.desc,id.desc",
+                "limit": "20",
+            },
+        )
+        if lookup_status == 200 and isinstance(lookup_data, list):
+            for row in lookup_data:
+                if not isinstance(row, dict):
+                    continue
+                row_fp = _agent_memory_fingerprint(row.get("content", ""))
+                if row_fp and row_fp == fp:
+                    row["pending"] = _agent_is_memory_pending(row.get("tags") if isinstance(row.get("tags"), list) else [])
+                    return row, None
+
     now_iso = _utc_now_iso()
     payload = {
         "user_id": user_id,
-        "kind": _normalize_agent_memory_kind(kind),
-        "content": _agent_short_text(content, AGENT_MEMORY_CONTENT_LIMIT),
-        "importance": max(0, min(100, int(importance))),
-        "tags": [str(tag).strip()[:40] for tag in (tags or []) if str(tag).strip()],
+        "kind": safe_kind,
+        "content": safe_content,
+        "importance": importance,
+        "tags": safe_tags,
         "source": str(source or "agent").strip()[:40] or "agent",
         "session_id": str(session_id).strip() if session_id else None,
         "created_at": now_iso,
@@ -2036,7 +2193,10 @@ def _agent_create_memory(*, supabase_url: str, service_key: str, user_id: str, k
     if status not in (200, 201):
         return None, f"supabase_insert_failed:{data}"
     rows = data if isinstance(data, list) else []
-    return (rows[0] if rows else None), None
+    memory = rows[0] if rows else None
+    if isinstance(memory, dict):
+        memory["pending"] = _agent_is_memory_pending(memory.get("tags") if isinstance(memory.get("tags"), list) else [])
+    return memory, None
 
 
 def _agent_create_task(*, supabase_url: str, service_key: str, user_id: str, title: str, details: str = "", priority: str = "normal", source: str = "agent", due_at: str | None = None) -> tuple[dict | None, str | None]:
@@ -2095,7 +2255,7 @@ def _agent_pick_tool_calls(last_user_text: str) -> list[dict]:
     lowered = text.lower()
     calls: list[dict] = []
 
-    wants_memory = any(keyword in text for keyword in ("記住", "記下", "幫我記", "幫我保存", "記錄", "別忘了")) or "remember" in lowered
+    wants_memory = _agent_should_auto_remember(text)
     wants_tasks = any(keyword in text for keyword in ("待辦", "任務", "提醒", "提醒我", "安排", "幫我做", "工作清單"))
     wants_moods = any(keyword in text for keyword in ("最近", "近幾天", "近七天", "情緒", "心情", "狀態", "趨勢", "波動"))
     wants_list_tasks = any(keyword in text for keyword in ("有哪些待辦", "列出待辦", "列出任務", "目前任務", "我的任務"))
@@ -2107,7 +2267,8 @@ def _agent_pick_tool_calls(last_user_text: str) -> list[dict]:
     elif wants_tasks:
         calls.append({"name": "create_task", "arguments": {"title": text, "details": text, "priority": "normal"}})
     if wants_memory:
-        calls.append({"name": "remember_memory", "arguments": {"content": text, "kind": "insight"}})
+        inferred_kind = _agent_infer_memory_kind_from_text(text)
+        calls.append({"name": "remember_memory", "arguments": {"content": text, "kind": inferred_kind}})
 
     deduped: list[dict] = []
     seen: set[str] = set()
@@ -2413,9 +2574,9 @@ def generate():
                     user_id=user_id,
                     kind=str(arguments.get("kind", "insight")),
                     content=str(arguments.get("content", last_user_text) or last_user_text),
-                    importance=int(arguments.get("importance", 60) or 60),
                     tags=["agent", "auto"],
                     source="generate_tool",
+                    pending=True,
                 )
                 if error_text:
                     status_text = "error"
