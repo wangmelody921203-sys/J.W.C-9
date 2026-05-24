@@ -3341,27 +3341,42 @@ def _agent_is_task_request(raw: str) -> bool:
     )
 
 
-def _agent_build_quick_action_plan(raw: str) -> str:
+def _agent_build_quick_action_plan(raw: str, persona: str) -> str:
     text = str(raw or "").strip()
+    mode = _resolve_persona(persona)
+
+    if mode == "companion":
+        if any(token in text for token in ("放鬆", "很累", "疲倦", "壓力", "紓壓")):
+            return "我先陪你做一個很小的放鬆步驟：先喝幾口水，慢慢吐氣 6 次，然後把手機放下 10 分鐘。"
+        return "我先陪你做一個最小步驟：現在先做 10 分鐘最不費力的第一步，做完就回來告訴我。"
+
     if any(token in text for token in ("放鬆", "很累", "疲倦", "壓力", "紓壓")):
+        lead = "我有接住你這份累，我先幫你排一版很溫和、現在就做得到的 30 分鐘放鬆排程："
+        if mode == "assistant":
+            lead = "先給你一版可直接執行的 30 分鐘放鬆排程："
         return (
-            "我先幫你排一版 30 分鐘放鬆排程：\n"
+            f"{lead}\n"
             "1. 3 分鐘：喝水 + 深呼吸 6 次，先讓身體降速。\n"
             "2. 12 分鐘：做一件低負擔放鬆（散步/伸展/洗熱水臉三選一）。\n"
             "3. 15 分鐘：不看訊息，聽輕音樂或閉眼休息，時間到再回來。"
         )
+
+    lead = "我先幫你排一版可執行的下一步："
+    if mode == "courage_coach":
+        lead = "我先不讓你一個人扛，我們先把事情縮到可做的大小："
     return (
-        "我先幫你排一版可執行的下一步：\n"
+        f"{lead}\n"
         "1. 先做 10 分鐘最小步驟，把事情動起來。\n"
         "2. 中間休息 5 分鐘，確認卡點在哪。\n"
         "3. 再做 15 分鐘，把今天的可交付結果先完成 1 個。"
     )
 
 
-def _agent_enforce_action_reply(*, reply: str, last_user_text: str, tool_results: list[dict], has_authed_user: bool) -> str:
+def _agent_enforce_action_reply(*, reply: str, persona: str, last_user_text: str, tool_results: list[dict], has_authed_user: bool) -> str:
     if not _agent_is_task_request(last_user_text):
         return reply
 
+    mode = _resolve_persona(persona)
     task_created = False
     for item in tool_results:
         if not isinstance(item, dict):
@@ -3372,17 +3387,34 @@ def _agent_enforce_action_reply(*, reply: str, last_user_text: str, tool_results
             task_created = True
             break
 
-    plan_text = _agent_build_quick_action_plan(last_user_text)
+    plan_text = _agent_build_quick_action_plan(last_user_text, mode)
     if task_created:
-        suffix = "我也幫你建立了一筆任務追蹤，等等你只要回報做完第 1 步就好。"
+        if mode == "companion":
+            suffix = "我也幫你記成任務了，你先只做第一步就好，我在。"
+        elif mode == "assistant":
+            suffix = "已替你建立任務追蹤，請先完成第 1 步後再回報。"
+        else:
+            suffix = "我也幫你建立了一筆任務追蹤，現在你先只做第 1 步就好，做完我們再一起看下一步。"
     elif has_authed_user:
-        suffix = "我先給你可執行排程；若你要，我下一句就幫你補建任務追蹤。"
+        if mode == "companion":
+            suffix = "你如果願意，我下一句就幫你補建任務追蹤。"
+        elif mode == "assistant":
+            suffix = "若需要，我可在下一句補建任務追蹤。"
+        else:
+            suffix = "我先把可執行排程給你；如果你願意，我下一句就幫你補建任務追蹤。"
     else:
-        suffix = "我先給你可執行排程；若要我幫你自動記成任務，先登入即可。"
+        if mode == "companion":
+            suffix = "若你想讓我自動記成任務，登入後我可以直接幫你做。"
+        elif mode == "assistant":
+            suffix = "若要自動建立任務，請先登入。"
+        else:
+            suffix = "若你要我幫你自動記成任務，登入後我可以直接幫你做。"
 
-    original = _agent_short_text(str(reply or "").strip(), 220)
+    original = _agent_short_text(str(reply or "").strip(), 180)
     if original:
-        return f"{plan_text}\n\n{suffix}\n\n補一句陪你：{original}"
+        if mode == "assistant":
+            return f"{plan_text}\n\n{suffix}\n\n{original}"
+        return f"{plan_text}\n\n{suffix}\n\n{original}"
     return f"{plan_text}\n\n{suffix}"
 
 
@@ -3881,6 +3913,7 @@ def generate():
 
     reply = _agent_enforce_action_reply(
         reply=reply,
+        persona=persona,
         last_user_text=last_user_text,
         tool_results=tool_results,
         has_authed_user=bool(user_id and supabase_url and service_key),
