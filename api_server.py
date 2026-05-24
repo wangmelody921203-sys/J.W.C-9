@@ -1945,8 +1945,8 @@ def agent_memories_create():
                 user_tags.append(value[:40])
 
     kind = _normalize_agent_memory_kind(kind_input or _agent_infer_memory_kind_from_text(content))
-    pending = bool(payload.get("pending", source != "manual_curation"))
-    tags = _agent_build_memory_tags(user_tags, pending=pending)
+    pending_input = payload.get("pending", None)
+    pending = bool(pending_input) if pending_input is not None else False
     neighbors_status, neighbors_data = _supabase_rest_request(
         method="GET",
         path="/rest/v1/agent_memories",
@@ -1964,6 +1964,10 @@ def agent_memories_create():
         return jsonify({"error": "supabase_query_failed", "details": neighbors_data}), 502
     neighbors_rows = neighbors_data if isinstance(neighbors_data, list) else []
     conflicts = _agent_find_memory_conflicts(content=content, kind=kind, rows=neighbors_rows)
+    if pending_input is None and conflicts:
+        pending = True
+
+    tags = _agent_build_memory_tags(user_tags, pending=pending)
     if conflicts:
         tags = _agent_clean_memory_tags(tags + [_AGENT_TAG_CONFLICT])
     importance = _agent_compute_memory_importance(kind=kind, content=content, source=source, pending=pending)
@@ -2529,9 +2533,8 @@ def _agent_create_memory(*, supabase_url: str, service_key: str, user_id: str, k
         return None, "content_not_meaningful"
 
     safe_kind = _normalize_agent_memory_kind(kind or _agent_infer_memory_kind_from_text(safe_content))
-    is_pending = bool(pending) if pending is not None else (str(source or "").strip() != "manual_curation")
-    safe_tags = _agent_build_memory_tags(tags or [], pending=is_pending)
-    importance = _agent_compute_memory_importance(kind=safe_kind, content=safe_content, source=source, pending=is_pending)
+    pending_input = pending
+    is_pending = bool(pending_input) if pending_input is not None else False
 
     neighbors_status, neighbors_data = _supabase_rest_request(
         method="GET",
@@ -2550,8 +2553,13 @@ def _agent_create_memory(*, supabase_url: str, service_key: str, user_id: str, k
         return None, f"supabase_query_failed:{neighbors_data}"
     neighbors_rows = neighbors_data if isinstance(neighbors_data, list) else []
     conflicts = _agent_find_memory_conflicts(content=safe_content, kind=safe_kind, rows=neighbors_rows)
+    if pending_input is None and conflicts:
+        is_pending = True
+
+    safe_tags = _agent_build_memory_tags(tags or [], pending=is_pending)
     if conflicts:
         safe_tags = _agent_clean_memory_tags(safe_tags + [_AGENT_TAG_CONFLICT])
+    importance = _agent_compute_memory_importance(kind=safe_kind, content=safe_content, source=source, pending=is_pending)
 
     # Simple duplicate guard: same kind + same normalized content => reuse existing.
     fp = _agent_memory_fingerprint(safe_content)
@@ -2986,7 +2994,6 @@ def generate():
                     content=str(arguments.get("content", last_user_text) or last_user_text),
                     tags=["agent", "auto"],
                     source="generate_tool",
-                    pending=True,
                 )
                 if error_text:
                     status_text = "error"
