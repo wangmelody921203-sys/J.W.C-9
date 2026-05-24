@@ -3518,7 +3518,8 @@
       let reply = petBuildFallback(petCurrentEmotion);
       try {
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 5000);
+        const timeoutMs = currentSession?.access_token ? 12000 : 7000;
+        const tid = setTimeout(() => ctrl.abort(), timeoutMs);
         const headers = { "Content-Type": "application/json" };
         if (currentSession?.access_token) {
           headers["Authorization"] = `Bearer ${currentSession.access_token}`;

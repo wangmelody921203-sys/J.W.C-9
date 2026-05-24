@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import json
 import os
 import re
@@ -2203,15 +2204,53 @@ def generate():
 
     # 在 system prompt 後插入當次情緒脈絡（結構化，不直接拼接用戶輸入）
     emotion_context = f"[本次掃描偵測到的情緒：{emotion}]"
+    tool_calls = _agent_pick_tool_calls(last_user_text) if user_id and supabase_url and service_key else []
+
     memories_rows: list[dict] = []
     tasks_rows: list[dict] = []
     moods_rows: list[dict] = []
     if user_id and supabase_url and service_key:
-        memories_rows = _agent_list_recent_memories(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=5)
-        tasks_rows = _agent_list_open_tasks(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=5)
-        moods_rows = _agent_list_recent_moods(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=5)
+        need_tasks = any(call.get("name") in {"list_open_tasks", "create_task"} for call in tool_calls)
+        need_moods = any(call.get("name") == "get_recent_moods" for call in tool_calls)
 
-    tool_calls = _agent_pick_tool_calls(last_user_text) if user_id and supabase_url and service_key else []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            futures: dict[str, concurrent.futures.Future] = {
+                "memories": executor.submit(
+                    _agent_list_recent_memories,
+                    supabase_url=supabase_url,
+                    service_key=service_key,
+                    user_id=user_id,
+                    limit=5,
+                )
+            }
+            if need_tasks:
+                futures["tasks"] = executor.submit(
+                    _agent_list_open_tasks,
+                    supabase_url=supabase_url,
+                    service_key=service_key,
+                    user_id=user_id,
+                    limit=8,
+                )
+            if need_moods:
+                futures["moods"] = executor.submit(
+                    _agent_list_recent_moods,
+                    supabase_url=supabase_url,
+                    service_key=service_key,
+                    user_id=user_id,
+                    limit=7,
+                )
+
+            for key, future in futures.items():
+                try:
+                    value = future.result(timeout=3.0)
+                except Exception:
+                    value = []
+                if key == "memories":
+                    memories_rows = value if isinstance(value, list) else []
+                elif key == "tasks":
+                    tasks_rows = value if isinstance(value, list) else []
+                elif key == "moods":
+                    moods_rows = value if isinstance(value, list) else []
     tool_results: list[dict] = []
     for tool_call in tool_calls:
         tool_name = str(tool_call.get("name", "")).strip()
@@ -2224,10 +2263,20 @@ def generate():
         try:
             if tool_name == "get_recent_moods":
                 limit = int(arguments.get("limit", 7) or 7)
-                result_payload = _agent_list_recent_moods(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=limit)
+                if moods_rows and limit <= len(moods_rows):
+                    result_payload = moods_rows[:limit]
+                else:
+                    result_payload = _agent_list_recent_moods(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=limit)
+                    if isinstance(result_payload, list):
+                        moods_rows = result_payload
             elif tool_name == "list_open_tasks":
                 limit = int(arguments.get("limit", 5) or 5)
-                result_payload = _agent_list_open_tasks(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=limit)
+                if tasks_rows and limit <= len(tasks_rows):
+                    result_payload = tasks_rows[:limit]
+                else:
+                    result_payload = _agent_list_open_tasks(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=limit)
+                    if isinstance(result_payload, list):
+                        tasks_rows = result_payload
             elif tool_name == "create_task":
                 result_payload, error_text = _agent_create_task(
                     supabase_url=supabase_url,
@@ -2240,6 +2289,8 @@ def generate():
                 )
                 if error_text:
                     status_text = "error"
+                elif isinstance(result_payload, dict):
+                    tasks_rows = [result_payload] + [row for row in tasks_rows if str(row.get("id", "")) != str(result_payload.get("id", ""))]
             elif tool_name == "remember_memory":
                 result_payload, error_text = _agent_create_memory(
                     supabase_url=supabase_url,
@@ -2253,6 +2304,8 @@ def generate():
                 )
                 if error_text:
                     status_text = "error"
+                elif isinstance(result_payload, dict):
+                    memories_rows = [result_payload] + [row for row in memories_rows if str(row.get("id", "")) != str(result_payload.get("id", ""))]
             else:
                 status_text = "skipped"
                 error_text = "unknown_tool"
