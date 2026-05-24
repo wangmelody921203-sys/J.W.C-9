@@ -228,6 +228,7 @@ CHAT_MESSAGE_LENGTH_LIMIT = 1000
 DEFAULT_AGENT_MAX_MEMORIES_PER_USER = 300
 DEFAULT_AGENT_MAX_TOOL_LOGS_PER_USER = 1000
 AGENT_MEMORY_CONTENT_LIMIT = 1000
+AGENT_MEMORY_MIN_MEANINGFUL_CHARS = 8
 AGENT_TASK_TITLE_LIMIT = 120
 AGENT_TASK_DETAILS_LIMIT = 1500
 AGENT_TOOL_LOG_TEXT_LIMIT = 3000
@@ -331,6 +332,25 @@ def _normalize_agent_task_status(raw: str) -> str:
 def _normalize_agent_task_priority(raw: str) -> str:
     priority = str(raw or "").strip().lower()
     return priority if priority in _ALLOWED_AGENT_TASK_PRIORITY else "normal"
+
+
+def _is_meaningful_memory_content(raw: str) -> bool:
+    text = re.sub(r"\s+", " ", str(raw or "").strip())
+    if len(text) < AGENT_MEMORY_MIN_MEANINGFUL_CHARS:
+        return False
+    lowered = text.lower()
+    ban_phrases = {
+        "test",
+        "testing",
+        "測試",
+        "記住",
+        "記一下",
+        "先記著",
+        "先記住",
+    }
+    if lowered in ban_phrases:
+        return False
+    return True
 
 
 def _resolve_authed_user() -> tuple[str | None, str | None, str | None]:
@@ -1463,6 +1483,8 @@ def agent_memories_create():
         return jsonify({"error": "empty_content"}), 400
     if len(content) > AGENT_MEMORY_CONTENT_LIMIT:
         return jsonify({"error": "content_too_long", "limit": AGENT_MEMORY_CONTENT_LIMIT}), 400
+    if not _is_meaningful_memory_content(content):
+        return jsonify({"error": "content_not_meaningful", "min_chars": AGENT_MEMORY_MIN_MEANINGFUL_CHARS}), 400
 
     importance_raw = payload.get("importance", 50)
     try:
@@ -1516,6 +1538,79 @@ def agent_memories_create():
     rows = data if isinstance(data, list) else []
     memory = rows[0] if rows else None
     return jsonify({"ok": True, "memory": memory}), 201
+
+
+@app.patch("/agent/memories/<memory_id>")
+def agent_memories_update(memory_id: str):
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    target_id = str(memory_id).strip()
+    if not target_id:
+        return jsonify({"error": "invalid_memory_id"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    patch_doc: dict[str, object] = {"updated_at": _utc_now_iso()}
+
+    if "content" in payload:
+        content = str(payload.get("content", "")).strip()
+        if not content:
+            return jsonify({"error": "empty_content"}), 400
+        if len(content) > AGENT_MEMORY_CONTENT_LIMIT:
+            return jsonify({"error": "content_too_long", "limit": AGENT_MEMORY_CONTENT_LIMIT}), 400
+        if not _is_meaningful_memory_content(content):
+            return jsonify({"error": "content_not_meaningful", "min_chars": AGENT_MEMORY_MIN_MEANINGFUL_CHARS}), 400
+        patch_doc["content"] = content
+
+    if "kind" in payload:
+        patch_doc["kind"] = _normalize_agent_memory_kind(payload.get("kind", "insight"))
+
+    if "importance" in payload:
+        try:
+            importance = int(payload.get("importance", 50))
+        except (TypeError, ValueError):
+            importance = 50
+        patch_doc["importance"] = max(0, min(100, importance))
+
+    if "tags" in payload:
+        tags_raw = payload.get("tags", [])
+        tags: list[str] = []
+        if isinstance(tags_raw, list):
+            for item in tags_raw:
+                value = str(item or "").strip()
+                if value:
+                    tags.append(value[:40])
+        patch_doc["tags"] = tags
+
+    if len(patch_doc) == 1:
+        return jsonify({"error": "no_patch_fields"}), 400
+
+    status, data = _supabase_rest_request(
+        method="PATCH",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "id": f"eq.{target_id}",
+            "user_id": f"eq.{user_id}",
+        },
+        payload=patch_doc,
+        prefer="return=representation",
+    )
+    if status not in (200, 204):
+        return jsonify({"error": "supabase_update_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    memory = rows[0] if rows else None
+    if not memory:
+        return jsonify({"error": "memory_not_found"}), 404
+    return jsonify({"ok": True, "memory": memory})
 
 
 @app.delete("/agent/memories/<memory_id>")

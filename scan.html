@@ -964,6 +964,78 @@
       opacity: 0.65;
     }
 
+    .pet-memory-row {
+      display: flex;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      flex-shrink: 0;
+    }
+    .pet-memory-toggle,
+    .pet-memory-btn {
+      border-radius: 9px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1;
+      height: 28px;
+      cursor: pointer;
+      padding: 0 10px;
+    }
+    .pet-memory-toggle {
+      flex: 1;
+      text-align: left;
+    }
+    .pet-memory-panel {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 8px 10px;
+      max-height: 170px;
+      overflow-y: auto;
+      display: none;
+      flex-shrink: 0;
+    }
+    .pet-memory-panel.open {
+      display: block;
+    }
+    .pet-memory-item {
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 10px;
+      padding: 8px;
+      margin-bottom: 8px;
+    }
+    .pet-memory-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    .pet-memory-content {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.45;
+      white-space: pre-wrap;
+      margin-bottom: 6px;
+    }
+    .pet-memory-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .pet-memory-action {
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text);
+      border-radius: 7px;
+      font-size: 11px;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+    .pet-memory-empty {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 4px;
+    }
+
     .pet-messages {
       flex: 1;
       overflow-y: auto;
@@ -1213,6 +1285,14 @@
       <select id="pet-session-select" class="pet-session-select" aria-label="聊天室清單"></select>
       <button id="pet-session-new" class="pet-session-btn" type="button" aria-label="新增聊天室">新</button>
       <button id="pet-session-delete" class="pet-session-btn" type="button" aria-label="刪除聊天室">刪</button>
+    </div>
+    <div class="pet-memory-row">
+      <button id="pet-memory-toggle" class="pet-memory-toggle" type="button" aria-label="展開記憶庫">記憶庫（可編輯）</button>
+      <button id="pet-memory-add" class="pet-memory-btn" type="button" aria-label="新增記憶">＋記</button>
+      <button id="pet-memory-refresh" class="pet-memory-btn" type="button" aria-label="刷新記憶">↻</button>
+    </div>
+    <div id="pet-memory-panel" class="pet-memory-panel" aria-label="Agent 記憶庫">
+      <div id="pet-memory-list" class="pet-memory-list"></div>
     </div>
     <div id="pet-messages" class="pet-messages"></div>
     <div class="pet-input-row">
@@ -2903,6 +2983,11 @@
     const petSessionSelect = document.getElementById("pet-session-select");
     const petSessionNewBtn = document.getElementById("pet-session-new");
     const petSessionDeleteBtn = document.getElementById("pet-session-delete");
+    const petMemoryToggleBtn = document.getElementById("pet-memory-toggle");
+    const petMemoryAddBtn = document.getElementById("pet-memory-add");
+    const petMemoryRefreshBtn = document.getElementById("pet-memory-refresh");
+    const petMemoryPanel = document.getElementById("pet-memory-panel");
+    const petMemoryList = document.getElementById("pet-memory-list");
     const petMessages = document.getElementById("pet-messages");
     const petInput    = document.getElementById("pet-input");
     const petSendBtn  = document.getElementById("pet-send");
@@ -2918,6 +3003,9 @@
     let petSessionsLoadedUserKey = "";
     let petLocalSessionHistories = {};
     let petLocalLoadedStorageKey = "";
+    let petMemoryPanelOpen = false;
+    let petAgentMemories = [];
+    let petMemoriesLoadedUserKey = "";
     let petCloudHealthy = true;
     let petWaiting = false;
 
@@ -2927,6 +3015,16 @@
 
     function petGetUserKey() {
       return String(currentSession?.user?.id || "").trim();
+    }
+
+    function petMeaningfulMemory(text) {
+      const value = String(text || "").trim();
+      if (value.length < 8) {
+        return false;
+      }
+      const low = value.toLowerCase();
+      const weak = ["test", "testing", "測試", "記住", "記一下", "先記住", "先記著"];
+      return !weak.includes(low);
     }
 
     function petHasCloudSession() {
@@ -3217,6 +3315,226 @@
       return data;
     }
 
+    async function petAgentApi(path, init = {}) {
+      if (!currentSession?.access_token) {
+        throw new Error("missing_bearer");
+      }
+      const headers = {
+        "Authorization": `Bearer ${currentSession.access_token}`,
+      };
+      if (init.body) {
+        headers["Content-Type"] = "application/json";
+      }
+      const res = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        headers: {
+          ...headers,
+          ...(init.headers || {}),
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    function petRenderMemoryList() {
+      if (!petMemoryList) {
+        return;
+      }
+      petMemoryList.innerHTML = "";
+      if (!petHasCloudSession()) {
+        const empty = document.createElement("div");
+        empty.className = "pet-memory-empty";
+        empty.textContent = "登入後可顯示並編輯 Agent 記憶庫。";
+        petMemoryList.appendChild(empty);
+        return;
+      }
+      if (!petAgentMemories.length) {
+        const empty = document.createElement("div");
+        empty.className = "pet-memory-empty";
+        empty.textContent = "目前沒有記憶。建議存具體、可行動、可驗證的內容。";
+        petMemoryList.appendChild(empty);
+        return;
+      }
+
+      petAgentMemories.forEach((memory) => {
+        const id = String(memory?.id || "").trim();
+        if (!id) {
+          return;
+        }
+        const item = document.createElement("div");
+        item.className = "pet-memory-item";
+
+        const meta = document.createElement("div");
+        meta.className = "pet-memory-meta";
+        const kind = String(memory.kind || "insight");
+        const importance = Number(memory.importance || 50);
+        meta.textContent = `${kind} ・重要度 ${importance}`;
+
+        const content = document.createElement("div");
+        content.className = "pet-memory-content";
+        content.textContent = String(memory.content || "");
+
+        const actions = document.createElement("div");
+        actions.className = "pet-memory-actions";
+
+        const editBtn = document.createElement("button");
+        editBtn.className = "pet-memory-action";
+        editBtn.type = "button";
+        editBtn.textContent = "編輯";
+        editBtn.setAttribute("data-action", "edit-memory");
+        editBtn.setAttribute("data-memory-id", id);
+
+        const delBtn = document.createElement("button");
+        delBtn.className = "pet-memory-action";
+        delBtn.type = "button";
+        delBtn.textContent = "刪除";
+        delBtn.setAttribute("data-action", "delete-memory");
+        delBtn.setAttribute("data-memory-id", id);
+
+        actions.appendChild(editBtn);
+        actions.appendChild(delBtn);
+        item.appendChild(meta);
+        item.appendChild(content);
+        item.appendChild(actions);
+        petMemoryList.appendChild(item);
+      });
+    }
+
+    async function petLoadMemories(force = false) {
+      if (!petHasCloudSession()) {
+        petAgentMemories = [];
+        petMemoriesLoadedUserKey = "";
+        petRenderMemoryList();
+        return;
+      }
+      const userKey = petGetUserKey();
+      if (!force && petMemoriesLoadedUserKey === userKey && petAgentMemories.length) {
+        petRenderMemoryList();
+        return;
+      }
+      try {
+        const data = await petAgentApi("/agent/memories?limit=30&offset=0");
+        const rows = Array.isArray(data.memories) ? data.memories : [];
+        petAgentMemories = rows
+          .filter((row) => row && row.id && row.content)
+          .map((row) => ({
+            id: String(row.id),
+            kind: String(row.kind || "insight"),
+            content: String(row.content || "").trim(),
+            importance: Number(row.importance || 50),
+            tags: Array.isArray(row.tags) ? row.tags : [],
+          }))
+          .filter((row) => row.content);
+        petMemoriesLoadedUserKey = userKey;
+      } catch (err) {
+        console.warn("[pet] load memories failed:", err);
+      }
+      petRenderMemoryList();
+    }
+
+    async function petCreateMemoryByUser() {
+      if (!petHasCloudSession()) {
+        alert("請先登入，才能建立可同步的記憶。");
+        return;
+      }
+      const content = window.prompt("要記住什麼？（請寫具體、可驗證，至少 8 字）", "");
+      if (content === null) {
+        return;
+      }
+      if (!petMeaningfulMemory(content)) {
+        alert("記憶內容太短或太空泛，請至少 8 字並包含具體資訊。");
+        return;
+      }
+      const kind = window.prompt("記憶類型（profile/preference/constraint/goal/event/insight）", "insight");
+      if (kind === null) {
+        return;
+      }
+      const importanceRaw = window.prompt("重要度（0-100）", "70");
+      if (importanceRaw === null) {
+        return;
+      }
+      let importance = Number.parseInt(importanceRaw, 10);
+      if (!Number.isFinite(importance)) {
+        importance = 70;
+      }
+      importance = Math.max(0, Math.min(100, importance));
+
+      try {
+        await petAgentApi("/agent/memories", {
+          method: "POST",
+          body: JSON.stringify({
+            kind: String(kind || "insight").trim() || "insight",
+            content: String(content || "").trim(),
+            importance,
+            source: "manual_curation",
+          }),
+        });
+        await petLoadMemories(true);
+      } catch (err) {
+        alert("新增記憶失敗，請稍後再試。");
+      }
+    }
+
+    async function petEditMemory(memoryId) {
+      const target = petAgentMemories.find((row) => row.id === memoryId);
+      if (!target) {
+        return;
+      }
+      const content = window.prompt("編輯記憶內容（至少 8 字）", target.content || "");
+      if (content === null) {
+        return;
+      }
+      if (!petMeaningfulMemory(content)) {
+        alert("記憶內容太短或太空泛，請至少 8 字並包含具體資訊。");
+        return;
+      }
+      const kind = window.prompt("記憶類型", target.kind || "insight");
+      if (kind === null) {
+        return;
+      }
+      const importanceRaw = window.prompt("重要度（0-100）", String(target.importance || 50));
+      if (importanceRaw === null) {
+        return;
+      }
+      let importance = Number.parseInt(importanceRaw, 10);
+      if (!Number.isFinite(importance)) {
+        importance = Number(target.importance || 50);
+      }
+      importance = Math.max(0, Math.min(100, importance));
+
+      try {
+        await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            content: String(content || "").trim(),
+            kind: String(kind || "insight").trim() || "insight",
+            importance,
+          }),
+        });
+        await petLoadMemories(true);
+      } catch (err) {
+        alert("編輯記憶失敗，請稍後再試。");
+      }
+    }
+
+    async function petDeleteMemory(memoryId) {
+      if (!window.confirm("確定刪除這筆記憶嗎？")) {
+        return;
+      }
+      try {
+        await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
+          method: "DELETE",
+        });
+        await petLoadMemories(true);
+      } catch (err) {
+        alert("刪除記憶失敗，請稍後再試。");
+      }
+    }
+
     async function petSupabaseListSessions(limit = 60, offset = 0) {
       if (!supabaseClient || !petHasCloudSession()) {
         throw new Error("supabase_not_ready");
@@ -3428,6 +3746,8 @@
       petSessions = [];
       petCurrentSessionId = "";
       petHistory = [];
+      petAgentMemories = [];
+      petMemoriesLoadedUserKey = "";
       petLocalSessionHistories = {};
       petLocalLoadedStorageKey = "";
       if (!petHasCloudSession()) {
@@ -3439,12 +3759,20 @@
         }
       }
       petEnsureSessionReady(true);
+      if (petMemoryPanelOpen) {
+        void petLoadMemories(true);
+      } else {
+        petRenderMemoryList();
+      }
     }
 
     async function petOpen() {
       petPanel.classList.add("open");
       petInput.focus();
       await petEnsureSessionReady(false);
+      if (petMemoryPanelOpen) {
+        await petLoadMemories(false);
+      }
       if (petMessages.children.length === 0) {
         petRenderMessagesFromHistory();
       }
@@ -3538,6 +3866,11 @@
         if (res.ok) {
           const data = await res.json();
           reply = data.reply || data.fallback || reply;
+          const toolResults = Array.isArray(data.tool_results) ? data.tool_results : [];
+          const touchedMemory = toolResults.some((tool) => tool && tool.name === "remember_memory" && tool.status === "success");
+          if (touchedMemory && petMemoryPanelOpen) {
+            void petLoadMemories(true);
+          }
         } else {
           const data = await res.json().catch(() => ({}));
           reply = data.fallback || reply;
@@ -3647,6 +3980,42 @@
           console.warn("[pet] cloud session deletion failed, but local deleted:", err);
           // 雲端失敗，本地已刪除
         }
+      }
+    });
+
+    petMemoryToggleBtn.addEventListener("click", async () => {
+      petMemoryPanelOpen = !petMemoryPanelOpen;
+      petMemoryPanel.classList.toggle("open", petMemoryPanelOpen);
+      petMemoryToggleBtn.textContent = petMemoryPanelOpen ? "收起記憶庫" : "記憶庫（可編輯）";
+      if (petMemoryPanelOpen) {
+        await petLoadMemories(false);
+      }
+    });
+
+    petMemoryRefreshBtn.addEventListener("click", async () => {
+      await petLoadMemories(true);
+    });
+
+    petMemoryAddBtn.addEventListener("click", async () => {
+      await petCreateMemoryByUser();
+    });
+
+    petMemoryList.addEventListener("click", async (event) => {
+      const btn = event.target.closest("button[data-action]");
+      if (!btn) {
+        return;
+      }
+      const action = btn.getAttribute("data-action") || "";
+      const memoryId = btn.getAttribute("data-memory-id") || "";
+      if (!memoryId) {
+        return;
+      }
+      if (action === "edit-memory") {
+        await petEditMemory(memoryId);
+        return;
+      }
+      if (action === "delete-memory") {
+        await petDeleteMemory(memoryId);
       }
     });
 
