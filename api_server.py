@@ -575,7 +575,7 @@ def _agent_should_auto_remember(raw: str) -> bool:
     if text.endswith("?") or "？" in text:
         return False
     explicit = any(token in text for token in ("記住", "記下", "幫我記", "別忘了", "記錄")) or "remember" in lowered
-    stable = any(token in text for token in ("我喜歡", "我不喜歡", "我不能", "我希望", "我的目標", "我習慣", "我通常", "每天", "每週", "界線", "限制"))
+    stable = any(token in text for token in ("我喜歡", "我不喜歡", "我討厭", "討厭", "我不能", "我希望", "我的目標", "我習慣", "我通常", "每天", "每週", "界線", "限制", "太膩", "不愛"))
     return explicit or stable
 
 
@@ -2844,7 +2844,7 @@ def generate():
     接收前端送來的對話上下文，透過 Groq 生成桌寵回覆。
     前端只需送：
             { "emotion": "sadness",
-                "persona": "assistant",
+            "persona": "courage_coach",
         "messages": [{"role": "user", "content": "..."}, ...] }
     - messages 最多保留最近 10 輪（20 條），避免 token 爆量。
     - emotion 必須在白名單內，否則拒絕（防提示注入）。
@@ -2863,7 +2863,9 @@ def generate():
         emotion = "unknown"
 
     # 驗證 persona（白名單，避免任意 prompt 注入）
-    persona = _resolve_persona(payload.get("persona", "assistant"))
+    persona = _resolve_persona(payload.get("persona", "courage_coach"))
+    if persona == "assistant":
+        persona = "courage_coach"
     fallback_reply = _build_fallback_reply(emotion, persona)
 
     client = _get_groq_client()
