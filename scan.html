@@ -1500,6 +1500,7 @@
     const CAPTURE_MS = 850;
     const CAPTURE_W = 320;
     const MUSIC_CARD_COUNT = 3;
+    const PET_GENERATE_TIMEOUT_MS = 18000;
 
     const EMOTION_LABELS_ZH = {
       happiness: "愉悅",
@@ -4543,13 +4544,32 @@
       return `${first}\n\n${second}`;
     }
 
+    function petBuildGenerateHeaders() {
+      const headers = { "Content-Type": "application/json" };
+      const token = String(currentSession?.access_token || "").trim();
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+      return headers;
+    }
+
     async function petSend(userText) {
-      await petEnsureSessionReady(false);
       userText = userText.trim();
-      if (!userText || petWaiting) return;
+      if (!userText) return false;
+      if (petWaiting) {
+        petAppend("pet", "上一則我還在處理中，等我一下下再送出就好。", "crisis-note");
+        return false;
+      }
+
+      try {
+        await petEnsureSessionReady(false);
+      } catch (err) {
+        console.warn("[pet] ensure session failed:", err);
+      }
+
       if (userText.length > 500) {
         petAppend("pet", "說短一點吧，我一次只能讀 500 個字 😅");
-        return;
+        return false;
       }
 
       petAppend("user", userText);
@@ -4574,10 +4594,10 @@
       let crisisPhase = "guide";
       try {
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 5000);
+        const tid = setTimeout(() => ctrl.abort(), PET_GENERATE_TIMEOUT_MS);
         const res = await fetch(`${API_BASE}/generate`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: petBuildGenerateHeaders(),
           body: JSON.stringify({
             emotion: petCurrentEmotion,
             persona: petPersona,
@@ -4600,55 +4620,64 @@
         // 超時或網路錯誤 → 固定回退文案
       }
 
-      loadingBubble.remove();
-      if (isCrisisMode) {
-        const phaseChanged = petLastSafetyMode === "crisis"
-          && !!petLastCrisisPhase
-          && petLastCrisisPhase !== crisisPhase;
-        if (phaseChanged) {
-          const transitionText = petBuildCrisisPhaseTransition(petLastCrisisPhase, crisisPhase);
-          if (transitionText) {
-            petAppend("pet", transitionText, "crisis-note crisis-transition");
+      try {
+        loadingBubble.remove();
+        if (isCrisisMode) {
+          const phaseChanged = petLastSafetyMode === "crisis"
+            && !!petLastCrisisPhase
+            && petLastCrisisPhase !== crisisPhase;
+          if (phaseChanged) {
+            const transitionText = petBuildCrisisPhaseTransition(petLastCrisisPhase, crisisPhase);
+            if (transitionText) {
+              petAppend("pet", transitionText, "crisis-note crisis-transition");
+            }
           }
+          const showNotice = petLastSafetyMode !== "crisis" || petShouldShowCrisisNotice(crisisLevel);
+          if (showNotice) {
+            petAppend("pet", petBuildCrisisModeNotice(crisisLevel, crisisPhase), "crisis-note");
+          }
+          petAppend("pet", reply, "crisis-reply");
+        } else {
+          petAppend("pet", reply);
         }
-        const showNotice = petLastSafetyMode !== "crisis" || petShouldShowCrisisNotice(crisisLevel);
-        if (showNotice) {
-          petAppend("pet", petBuildCrisisModeNotice(crisisLevel, crisisPhase), "crisis-note");
+        petLastSafetyMode = isCrisisMode ? "crisis" : "normal";
+        petLastCrisisPhase = isCrisisMode ? crisisPhase : "";
+        petHistory.push({ role: "assistant", content: reply });
+        if (petHistory.length > 300) {
+          petHistory.splice(0, petHistory.length - 300);
         }
-        petAppend("pet", reply, "crisis-reply");
-      } else {
-        petAppend("pet", reply);
+        petSaveCurrentLocalHistory();
+        if (petCanUseCloud() && petCurrentSessionId && !petCurrentSessionId.startsWith("local-")) {
+          petSaveCloudMessage("assistant", reply).catch((err) => {
+            console.warn("[pet] save assistant message failed:", err);
+          });
+        }
+      } finally {
+        petWaiting = false;
+        petSendBtn.disabled = false;
+        petInput.focus();
       }
-      petLastSafetyMode = isCrisisMode ? "crisis" : "normal";
-      petLastCrisisPhase = isCrisisMode ? crisisPhase : "";
-      petHistory.push({ role: "assistant", content: reply });
-      if (petHistory.length > 300) {
-        petHistory.splice(0, petHistory.length - 300);
-      }
-      petSaveCurrentLocalHistory();
-      if (petCanUseCloud() && petCurrentSessionId && !petCurrentSessionId.startsWith("local-")) {
-        petSaveCloudMessage("assistant", reply).catch((err) => {
-          console.warn("[pet] save assistant message failed:", err);
-        });
-      }
+      return true;
+    }
 
-      petWaiting = false;
-      petSendBtn.disabled = false;
-      petInput.focus();
+    async function petTrySendFromInput() {
+      const text = petInput.value;
+      const sent = await petSend(text);
+      if (!sent) {
+        return;
+      }
+      petInput.value = "";
+      petInput.style.height = "auto";
     }
 
     petSendBtn.addEventListener("click", () => {
-      petSend(petInput.value);
-      petInput.value = "";
-      petInput.style.height = "auto";
+      void petTrySendFromInput();
     });
 
     petInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        petSend(petInput.value);
-        petInput.value = "";
-        petInput.style.height = "auto";
+        void petTrySendFromInput();
       }
     });
 

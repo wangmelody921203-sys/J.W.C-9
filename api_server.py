@@ -3272,13 +3272,31 @@ def _agent_log_turn_observability(
 
 def _agent_pick_tool_calls(last_user_text: str) -> list[dict]:
     text = str(last_user_text or "").strip()
-    lowered = text.lower()
     calls: list[dict] = []
 
     wants_memory = _agent_should_auto_remember(text)
-    wants_tasks = any(keyword in text for keyword in ("待辦", "任務", "提醒", "提醒我", "安排", "幫我做", "工作清單"))
+    wants_tasks = any(
+        keyword in text
+        for keyword in (
+            "待辦",
+            "任務",
+            "提醒",
+            "提醒我",
+            "安排",
+            "安排一下",
+            "幫我安排",
+            "幫我排",
+            "排程",
+            "排成",
+            "排個",
+            "排行程",
+            "規劃",
+            "幫我做",
+            "工作清單",
+        )
+    )
     wants_moods = any(keyword in text for keyword in ("最近", "近幾天", "近七天", "情緒", "心情", "狀態", "趨勢", "波動"))
-    wants_list_tasks = any(keyword in text for keyword in ("有哪些待辦", "列出待辦", "列出任務", "目前任務", "我的任務"))
+    wants_list_tasks = any(keyword in text for keyword in ("有哪些待辦", "待辦有哪些", "列出待辦", "列出任務", "目前任務", "我的任務", "幫我看任務"))
 
     if wants_moods:
         calls.append({"name": "get_recent_moods", "arguments": {"limit": 7}})
