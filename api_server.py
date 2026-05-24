@@ -166,6 +166,48 @@ def _build_fallback_reply(emotion: str, persona: str) -> str:
         second = "如果你想，我們可以先從現在最卡的一點開始。"
     return f"{first}\n\n{second}"
 
+
+_CRISIS_KEYWORDS_HIGH = (
+    "想死", "不想活", "自殺", "結束生命", "傷害自己", "割腕", "跳樓", "吞藥", "輕生",
+    "kill myself", "suicide", "end my life", "want to die", "hurt myself", "self harm",
+)
+
+_CRISIS_KEYWORDS_MEDIUM = (
+    "活不下去", "沒有活著的意義", "撐不下去", "絕望", "崩潰", "想消失", "殺人", "傷害別人",
+    "can't go on", "hopeless", "i am done", "kill someone", "hurt others", "violent",
+)
+
+
+def _detect_crisis_signal(raw: str) -> dict:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return {"is_crisis": False, "level": "none", "matched": []}
+
+    matched_high = [token for token in _CRISIS_KEYWORDS_HIGH if token in text]
+    if matched_high:
+        return {"is_crisis": True, "level": "high", "matched": matched_high[:5]}
+
+    matched_medium = [token for token in _CRISIS_KEYWORDS_MEDIUM if token in text]
+    if matched_medium:
+        return {"is_crisis": True, "level": "medium", "matched": matched_medium[:5]}
+
+    return {"is_crisis": False, "level": "none", "matched": []}
+
+
+def _build_crisis_reply(level: str = "medium") -> str:
+    if level == "high":
+        return (
+            "謝謝你願意說出來，這代表你正在很努力撐住。\n\n"
+            "你現在的安全最重要。請立刻聯絡當地緊急服務（例如 119）或自殺防治專線 1925，"
+            "也請馬上通知一位你信任的人陪你。\n\n"
+            "如果你願意，我可以先陪你做一件最小的安全步驟：先離開讓你受傷的物品，然後傳訊息給一位你信任的人。"
+        )
+    return (
+        "我有聽見你現在真的很辛苦，謝謝你願意說出來。\n\n"
+        "先把安全放在第一位：建議你現在就聯絡一位可信任的人，或撥打 1925 尋求即時支持。\n\n"
+        "你不用一個人扛著，我可以陪你把接下來 10 分鐘要做的第一步整理清楚。"
+    )
+
 _PERSONA_PROMPTS: dict[str, str] = {
     "assistant": """\
 你是「陰晴」AI 助手，目標是幫使用者把問題釐清並給出可執行下一步。
@@ -2904,6 +2946,30 @@ def generate():
         if m.get("role") == "user":
             last_user_text = str(m.get("content", "")).strip()
             break
+
+    crisis_info = _detect_crisis_signal(last_user_text)
+    if crisis_info.get("is_crisis"):
+        safe_reply = _build_crisis_reply(str(crisis_info.get("level", "medium")))
+        if user_id and supabase_url and service_key:
+            _agent_log_tool_execution(
+                supabase_url=supabase_url,
+                service_key=service_key,
+                user_id=user_id,
+                tool_name="crisis_guardrail",
+                status="success",
+                input_text=json.dumps({"text": _agent_short_text(last_user_text, 300)}, ensure_ascii=False),
+                output_text=json.dumps({"level": crisis_info.get("level", "medium"), "matched": crisis_info.get("matched", [])}, ensure_ascii=False),
+                error_text="",
+                latency_ms=0,
+            )
+        return jsonify({
+            "reply": safe_reply,
+            "emotion": emotion,
+            "persona": persona,
+            "tool_results": [],
+            "safety_mode": "crisis",
+            "crisis_level": crisis_info.get("level", "medium"),
+        })
 
     # 在 system prompt 後插入當次情緒脈絡（結構化，不直接拼接用戶輸入）
     emotion_context = f"[本次掃描偵測到的情緒（僅供參考）：{emotion}]"
