@@ -3319,6 +3319,73 @@ def _agent_pick_tool_calls(last_user_text: str) -> list[dict]:
     return deduped[:3]
 
 
+def _agent_is_task_request(raw: str) -> bool:
+    text = str(raw or "").strip()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "待辦",
+            "任務",
+            "提醒",
+            "安排",
+            "幫我安排",
+            "幫我排",
+            "排程",
+            "排成",
+            "排行程",
+            "規劃",
+            "計畫",
+        )
+    )
+
+
+def _agent_build_quick_action_plan(raw: str) -> str:
+    text = str(raw or "").strip()
+    if any(token in text for token in ("放鬆", "很累", "疲倦", "壓力", "紓壓")):
+        return (
+            "我先幫你排一版 30 分鐘放鬆排程：\n"
+            "1. 3 分鐘：喝水 + 深呼吸 6 次，先讓身體降速。\n"
+            "2. 12 分鐘：做一件低負擔放鬆（散步/伸展/洗熱水臉三選一）。\n"
+            "3. 15 分鐘：不看訊息，聽輕音樂或閉眼休息，時間到再回來。"
+        )
+    return (
+        "我先幫你排一版可執行的下一步：\n"
+        "1. 先做 10 分鐘最小步驟，把事情動起來。\n"
+        "2. 中間休息 5 分鐘，確認卡點在哪。\n"
+        "3. 再做 15 分鐘，把今天的可交付結果先完成 1 個。"
+    )
+
+
+def _agent_enforce_action_reply(*, reply: str, last_user_text: str, tool_results: list[dict], has_authed_user: bool) -> str:
+    if not _agent_is_task_request(last_user_text):
+        return reply
+
+    task_created = False
+    for item in tool_results:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("name", "")).strip() != "create_task":
+            continue
+        if str(item.get("status", "")).strip() == "success" and isinstance(item.get("result"), dict):
+            task_created = True
+            break
+
+    plan_text = _agent_build_quick_action_plan(last_user_text)
+    if task_created:
+        suffix = "我也幫你建立了一筆任務追蹤，等等你只要回報做完第 1 步就好。"
+    elif has_authed_user:
+        suffix = "我先給你可執行排程；若你要，我下一句就幫你補建任務追蹤。"
+    else:
+        suffix = "我先給你可執行排程；若要我幫你自動記成任務，先登入即可。"
+
+    original = _agent_short_text(str(reply or "").strip(), 220)
+    if original:
+        return f"{plan_text}\n\n{suffix}\n\n補一句陪你：{original}"
+    return f"{plan_text}\n\n{suffix}"
+
+
 def _agent_format_memories(memories: list[dict]) -> str:
     if not memories:
         return "- 無"
@@ -3811,6 +3878,13 @@ def generate():
         reply = fallback_reply
         fallback_used = True
         fallback_reason = "empty_reply"
+
+    reply = _agent_enforce_action_reply(
+        reply=reply,
+        last_user_text=last_user_text,
+        tool_results=tool_results,
+        has_authed_user=bool(user_id and supabase_url and service_key),
+    )
 
     observability = _agent_build_turn_observability(
         memories_rows=memories_rows,
