@@ -899,6 +899,19 @@
       pointer-events: auto;
     }
 
+    .pet-panel.custom-size {
+      max-height: none;
+    }
+
+    .pet-panel.expanded {
+      width: min(680px, calc(100vw - 32px));
+      height: min(82vh, 760px);
+      max-height: calc(100vh - 24px);
+      bottom: 12px;
+      right: 12px;
+      transform-origin: bottom right;
+    }
+
     .pet-header {
       display: flex;
       align-items: center;
@@ -928,6 +941,29 @@
       transition: color 0.12s ease;
     }
     .pet-close:hover { color: var(--text); }
+
+    .pet-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .pet-resize {
+      background: none;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 6px 8px;
+      border-radius: 8px;
+      transition: border-color 0.12s ease, color 0.12s ease;
+    }
+
+    .pet-resize:hover {
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.32);
+    }
 
     .pet-session-row {
       display: flex;
@@ -1120,6 +1156,53 @@
       align-self: flex-end;
     }
     .pet-send:disabled { opacity: 0.4; cursor: default; }
+
+    .pet-resize-handle {
+      position: absolute;
+      right: 6px;
+      bottom: 6px;
+      width: 16px;
+      height: 16px;
+      border: none;
+      border-radius: 4px;
+      background:
+        linear-gradient(135deg, transparent 48%, rgba(255, 255, 255, 0.44) 49%, rgba(255, 255, 255, 0.44) 52%, transparent 53%),
+        linear-gradient(135deg, transparent 64%, rgba(255, 255, 255, 0.3) 65%, rgba(255, 255, 255, 0.3) 68%, transparent 69%);
+      cursor: nwse-resize;
+      opacity: 0.75;
+    }
+
+    .pet-resize-handle:hover {
+      opacity: 1;
+    }
+
+    @media (max-width: 640px) {
+      .pet-panel {
+        right: 8px;
+        bottom: 86px;
+        width: calc(100vw - 16px);
+        max-height: calc(100vh - 110px);
+      }
+
+      .pet-panel.expanded {
+        right: 0;
+        bottom: 0;
+        width: 100vw;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+      }
+
+      .pet-memory-panel {
+        max-height: 32vh;
+      }
+
+      .pet-resize-handle {
+        display: none;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1279,7 +1362,10 @@
         <div class="pet-title">陰晴 🌿</div>
         <div class="pet-subtitle">勇氣同理教練模式・非心理諮商</div>
       </div>
-      <button id="pet-close" class="pet-close" aria-label="關閉">✕</button>
+      <div class="pet-header-actions">
+        <button id="pet-resize" class="pet-resize" type="button" aria-label="放大對話視窗">放大</button>
+        <button id="pet-close" class="pet-close" aria-label="關閉">✕</button>
+      </div>
     </div>
     <div class="pet-session-row">
       <select id="pet-session-select" class="pet-session-select" aria-label="聊天室清單"></select>
@@ -1300,6 +1386,7 @@
         placeholder="說點什麼…（Enter 送出）" maxlength="500"></textarea>
       <button id="pet-send" class="pet-send" aria-label="送出">↑</button>
     </div>
+    <button id="pet-resize-handle" class="pet-resize-handle" type="button" aria-label="拖拉調整聊天視窗大小" title="拖拉調整聊天視窗大小"></button>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -2980,6 +3067,8 @@
     const petTrigger  = document.getElementById("pet-trigger");
     const petPanel    = document.getElementById("pet-panel");
     const petClose    = document.getElementById("pet-close");
+    const petResizeBtn = document.getElementById("pet-resize");
+    const petResizeHandle = document.getElementById("pet-resize-handle");
     const petSessionSelect = document.getElementById("pet-session-select");
     const petSessionNewBtn = document.getElementById("pet-session-new");
     const petSessionDeleteBtn = document.getElementById("pet-session-delete");
@@ -3008,9 +3097,158 @@
     let petMemoriesLoadedUserKey = "";
     let petCloudHealthy = true;
     let petWaiting = false;
+    let petPanelExpanded = false;
+    let petPanelCustomSize = null;
+
+    const PET_PANEL_EXPANDED_KEY = "pet-panel-expanded-v1";
+    const PET_PANEL_SIZE_KEY = "pet-panel-size-v1";
 
     function petSetDnd(on) {
       petTrigger.classList.toggle("dnd", on);
+    }
+
+    function petIsMobileViewport() {
+      return window.matchMedia("(max-width: 640px)").matches;
+    }
+
+    function petGetPanelSizeLimit() {
+      const maxWidth = Math.max(320, Math.min(window.innerWidth - 16, 900));
+      const maxHeight = Math.max(360, Math.min(window.innerHeight - 20, 860));
+      return {
+        minWidth: 320,
+        minHeight: 380,
+        maxWidth,
+        maxHeight,
+      };
+    }
+
+    function petApplyCustomSize() {
+      if (!petPanel) {
+        return;
+      }
+      if (petPanelExpanded || petIsMobileViewport() || !petPanelCustomSize) {
+        petPanel.classList.remove("custom-size");
+        petPanel.style.width = "";
+        petPanel.style.height = "";
+        return;
+      }
+      const limit = petGetPanelSizeLimit();
+      const width = Math.max(limit.minWidth, Math.min(limit.maxWidth, Number(petPanelCustomSize.width) || 360));
+      const height = Math.max(limit.minHeight, Math.min(limit.maxHeight, Number(petPanelCustomSize.height) || 520));
+      petPanelCustomSize = { width, height };
+      petPanel.classList.add("custom-size");
+      petPanel.style.width = `${width}px`;
+      petPanel.style.height = `${height}px`;
+    }
+
+    function petLoadPanelCustomSize() {
+      try {
+        const raw = localStorage.getItem(PET_PANEL_SIZE_KEY);
+        if (!raw) {
+          petPanelCustomSize = null;
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        if (parsed && Number.isFinite(parsed.width) && Number.isFinite(parsed.height)) {
+          petPanelCustomSize = {
+            width: Number(parsed.width),
+            height: Number(parsed.height),
+          };
+        }
+      } catch (_) {
+        petPanelCustomSize = null;
+      }
+      petApplyCustomSize();
+    }
+
+    function petSavePanelCustomSize() {
+      if (!petPanelCustomSize) {
+        return;
+      }
+      try {
+        localStorage.setItem(PET_PANEL_SIZE_KEY, JSON.stringify(petPanelCustomSize));
+      } catch (_) {
+        // ignore localStorage errors
+      }
+    }
+
+    function petLoadPanelExpandedState() {
+      try {
+        petPanelExpanded = localStorage.getItem(PET_PANEL_EXPANDED_KEY) === "1";
+      } catch (_) {
+        petPanelExpanded = false;
+      }
+      petApplyPanelExpandedState();
+    }
+
+    function petApplyPanelExpandedState() {
+      petPanel.classList.toggle("expanded", petPanelExpanded);
+      petApplyCustomSize();
+      if (!petResizeBtn) {
+        return;
+      }
+      petResizeBtn.textContent = petPanelExpanded ? "還原" : "放大";
+      petResizeBtn.setAttribute("aria-label", petPanelExpanded ? "還原對話視窗" : "放大對話視窗");
+      petResizeBtn.title = petPanelExpanded ? "還原對話視窗" : "放大對話視窗";
+    }
+
+    function petTogglePanelExpanded() {
+      petPanelExpanded = !petPanelExpanded;
+      petApplyPanelExpandedState();
+      try {
+        localStorage.setItem(PET_PANEL_EXPANDED_KEY, petPanelExpanded ? "1" : "0");
+      } catch (_) {
+        // ignore localStorage errors
+      }
+    }
+
+    function petInitPanelResizeHandle() {
+      if (!petResizeHandle || !petPanel) {
+        return;
+      }
+      let dragging = false;
+      let startX = 0;
+      let startY = 0;
+      let startWidth = 0;
+      let startHeight = 0;
+
+      const onMove = (event) => {
+        if (!dragging || petPanelExpanded || petIsMobileViewport()) {
+          return;
+        }
+        const dx = event.clientX - startX;
+        const dy = event.clientY - startY;
+        const limit = petGetPanelSizeLimit();
+        const width = Math.max(limit.minWidth, Math.min(limit.maxWidth, startWidth + dx));
+        const height = Math.max(limit.minHeight, Math.min(limit.maxHeight, startHeight + dy));
+        petPanelCustomSize = { width, height };
+        petApplyCustomSize();
+      };
+
+      const stopDrag = () => {
+        if (!dragging) {
+          return;
+        }
+        dragging = false;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", stopDrag);
+        petSavePanelCustomSize();
+      };
+
+      petResizeHandle.addEventListener("pointerdown", (event) => {
+        if (petPanelExpanded || petIsMobileViewport()) {
+          return;
+        }
+        dragging = true;
+        startX = event.clientX;
+        startY = event.clientY;
+        const rect = petPanel.getBoundingClientRect();
+        startWidth = rect.width;
+        startHeight = rect.height;
+        petResizeHandle.setPointerCapture(event.pointerId);
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", stopDrag);
+      });
     }
 
     function petGetUserKey() {
@@ -3847,6 +4085,8 @@
       void petOpen();
     });
     petClose.addEventListener("click", petClose_);
+    petResizeBtn.addEventListener("click", petTogglePanelExpanded);
+    window.addEventListener("resize", petApplyCustomSize);
 
     // Esc 關閉
     document.addEventListener("keydown", (e) => {
@@ -4086,6 +4326,9 @@
 
     // 掃描進行中啟用勿擾，掃描後帶入情緒並關閉勿擾
     const _origStartAutoScan = startAutoScan;
+    petLoadPanelExpandedState();
+    petLoadPanelCustomSize();
+    petInitPanelResizeHandle();
     // 利用 finalizeScan 完成後更新情緒上下文
     const _origFinalizeScan = finalizeScan;
     // 覆寫 finalizeScan 以注入桌寵情緒更新
