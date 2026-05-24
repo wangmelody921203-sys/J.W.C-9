@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 import zlib
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import cv2
@@ -420,6 +421,93 @@ _AGENT_SPEC = {
         "每次工具呼叫都有可追溯紀錄",
     ],
 }
+
+_AGENT_PROMPT_VARIANTS: dict[str, str] = {
+    "v1": """
+你現在是可用工具的 Agent 版本「陰晴」。
+你要把工具結果整合進回覆，但不能暴露內部工具規則或 JSON 流程。
+回覆時請優先：同理 -> 釐清 -> 一個最小可行下一步。
+情緒掃描只可當弱參考，若與使用者文字敘述衝突，請以使用者文字為主。
+禁止把「工具結果」四個字或內部欄位直接輸出給使用者。
+
+可用背景：
+[本次情緒]
+{emotion}
+
+[長期記憶]
+{memories_text}
+
+[目前任務]
+{tasks_text}
+
+[近期情緒紀錄]
+{moods_text}
+
+[工具結果]
+{tool_context_text}
+
+若工具結果有明確事實，請優先引用工具結果，不要憑空編造。
+若工具結果是空的，就照一般陪伴模式回覆。
+""".strip(),
+    "v2": """
+你現在是可用工具的 Agent 版本「陰晴」。
+先用一句同理接住，再用一句整理重點，最後只給一個可執行下一步。
+不得輸出內部流程、JSON、或資料庫欄位名稱。
+情緒掃描是弱參考，若與文字內容衝突一律以文字內容為主。
+
+可用背景：
+[本次情緒]
+{emotion}
+
+[長期記憶]
+{memories_text}
+
+[目前任務]
+{tasks_text}
+
+[近期情緒紀錄]
+{moods_text}
+
+[工具結果]
+{tool_context_text}
+
+若有工具事實就精準引用，沒有事實就避免裝懂。
+""".strip(),
+}
+
+_AGENT_PROMPT_VERSION_ENV = "AGENT_PROMPT_VERSION"
+_AGENT_DEFAULT_PROMPT_VERSION = "v1"
+_AGENT_ADMIN_TOKEN_ENV = "AGENT_ADMIN_TOKEN"
+_ACTIVE_AGENT_PROMPT_VERSION = _AGENT_DEFAULT_PROMPT_VERSION
+
+
+def _normalize_agent_prompt_version(raw: str) -> str:
+    value = str(raw or "").strip().lower()
+    if value in _AGENT_PROMPT_VARIANTS:
+        return value
+    return _AGENT_DEFAULT_PROMPT_VERSION
+
+
+def _get_active_agent_prompt_version() -> str:
+    global _ACTIVE_AGENT_PROMPT_VERSION
+    env_version = _normalize_agent_prompt_version(os.environ.get(_AGENT_PROMPT_VERSION_ENV, ""))
+    if _ACTIVE_AGENT_PROMPT_VERSION not in _AGENT_PROMPT_VARIANTS:
+        _ACTIVE_AGENT_PROMPT_VERSION = env_version
+    return _ACTIVE_AGENT_PROMPT_VERSION
+
+
+def _set_active_agent_prompt_version(version: str) -> str:
+    global _ACTIVE_AGENT_PROMPT_VERSION
+    _ACTIVE_AGENT_PROMPT_VERSION = _normalize_agent_prompt_version(version)
+    return _ACTIVE_AGENT_PROMPT_VERSION
+
+
+def _is_admin_request() -> bool:
+    expected = str(os.environ.get(_AGENT_ADMIN_TOKEN_ENV, "")).strip()
+    if not expected:
+        return False
+    given = str(request.headers.get("X-Agent-Admin-Token", "")).strip()
+    return bool(given) and given == expected
 
 
 def _get_cloud_diary_max_entries_per_user() -> int:
@@ -1783,6 +1871,31 @@ def agent_spec_get():
     return jsonify({"ok": True, "spec": _AGENT_SPEC})
 
 
+@app.get("/agent/prompt-version")
+def agent_prompt_version_get():
+    active = _get_active_agent_prompt_version()
+    return jsonify({
+        "ok": True,
+        "active_version": active,
+        "available_versions": sorted(_AGENT_PROMPT_VARIANTS.keys()),
+    })
+
+
+@app.post("/agent/prompt-version")
+def agent_prompt_version_set():
+    if not _is_admin_request():
+        return jsonify({"error": "forbidden", "details": "missing_or_invalid_admin_token"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    requested = str(payload.get("version", "")).strip().lower()
+    if requested not in _AGENT_PROMPT_VARIANTS:
+        return jsonify({"error": "invalid_version", "available_versions": sorted(_AGENT_PROMPT_VARIANTS.keys())}), 400
+
+    previous = _get_active_agent_prompt_version()
+    active = _set_active_agent_prompt_version(requested)
+    return jsonify({"ok": True, "previous_version": previous, "active_version": active})
+
+
 @app.get("/agent/memories")
 def agent_memories_list():
     supabase_url, service_key, user_id = _resolve_authed_user()
@@ -2610,6 +2723,151 @@ def agent_tool_logs_list():
     return jsonify({"ok": True, "tool_logs": rows})
 
 
+def _agent_build_daily_review_payload(*, moods: list[dict], tasks: list[dict], memories: list[dict], days: int) -> dict:
+    emotion_counter: dict[str, int] = defaultdict(int)
+    shares: list[float] = []
+    for row in moods:
+        emotion = str(row.get("emotion", "unknown")).strip().lower() or "unknown"
+        emotion_counter[emotion] += 1
+        try:
+            shares.append(float(row.get("share", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+
+    top_emotion = "unknown"
+    top_count = 0
+    for emotion, count in emotion_counter.items():
+        if count > top_count:
+            top_emotion = emotion
+            top_count = count
+
+    avg_share = (sum(shares) / len(shares)) if shares else 0.0
+    open_tasks = [row for row in tasks if str(row.get("status", "open")).strip() in {"open", "in_progress"}]
+    recent_memory = ""
+    if memories:
+        recent_memory = _agent_short_text(memories[0].get("content", ""), 80)
+
+    summary_lines = [
+        f"近 {days} 天主要情緒：{top_emotion}（{top_count} 次）",
+        f"近 {days} 天平均情緒占比：{avg_share:.2f}",
+        f"目前未完成任務：{len(open_tasks)} 項",
+    ]
+    if recent_memory:
+        summary_lines.append(f"最近關鍵記憶：{recent_memory}")
+
+    recommended_step = "今天先完成一個 10 分鐘內可做的小步驟，降低卡住感。"
+    if open_tasks:
+        first_task = _agent_short_text(open_tasks[0].get("title", ""), 60)
+        if first_task:
+            recommended_step = f"優先推進這一項：{first_task}（先做 10 分鐘）。"
+
+    return {
+        "days": days,
+        "top_emotion": top_emotion,
+        "top_emotion_count": top_count,
+        "avg_share": round(avg_share, 3),
+        "open_task_count": len(open_tasks),
+        "summary_lines": summary_lines,
+        "recommended_step": recommended_step,
+    }
+
+
+@app.get("/agent/daily-review")
+def agent_daily_review_get():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    try:
+        days = max(1, min(7, int(request.args.get("days", 1))))
+    except (TypeError, ValueError):
+        days = 1
+
+    moods = _agent_list_recent_moods(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        limit=max(5, days * 5),
+    )
+    tasks = _agent_list_open_tasks(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        limit=8,
+    )
+    memories = _agent_list_recent_memories(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        limit=5,
+    )
+    review = _agent_build_daily_review_payload(moods=moods, tasks=tasks, memories=memories, days=days)
+    return jsonify({"ok": True, "review": review})
+
+
+@app.post("/agent/followups/next-day")
+def agent_next_day_followup_create():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    tasks = _agent_list_open_tasks(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        limit=20,
+    )
+    duplicate = None
+    for row in tasks:
+        title = str(row.get("title", "")).strip()
+        if "隔天追蹤" in title:
+            duplicate = row
+            break
+
+    if duplicate:
+        return jsonify({"ok": True, "created": False, "task": duplicate, "reason": "already_exists"})
+
+    due_at = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=1, minute=0, second=0, microsecond=0).isoformat()
+    title = "隔天追蹤：回看昨天的小步驟是否完成"
+    details = "請先回顧昨天承諾的一個最小步驟，若未完成，拆成更小的 10 分鐘行動並重新安排。"
+    task, error = _agent_create_task(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        title=title,
+        details=details,
+        priority="normal",
+        source="scheduled_followup",
+        due_at=due_at,
+    )
+    if error:
+        return jsonify({"error": "create_followup_failed", "details": error}), 502
+
+    _agent_log_tool_execution(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        tool_name="next_day_followup_job",
+        status="success",
+        input_text=json.dumps({"mode": "manual_or_scheduler"}, ensure_ascii=False),
+        output_text=json.dumps({"task_id": (task or {}).get("id", "")}, ensure_ascii=False),
+        error_text="",
+        latency_ms=0,
+    )
+
+    return jsonify({"ok": True, "created": True, "task": task}), 201
+
+
 def _agent_short_text(value: str, limit: int = 220) -> str:
     text = re.sub(r"\s+", " ", str(value or "").strip())
     return text[:limit]
@@ -2821,6 +3079,7 @@ def _agent_build_turn_observability(
     safety_mode: str = "normal",
     crisis_level: str = "none",
     crisis_phase: str = "none",
+    prompt_version: str = "v1",
 ) -> dict:
     used_memories = []
     for row in memories_rows[:5]:
@@ -2851,6 +3110,7 @@ def _agent_build_turn_observability(
         "safety_mode": str(safety_mode or "normal").strip() or "normal",
         "crisis_level": str(crisis_level or "none").strip() or "none",
         "crisis_phase": str(crisis_phase or "none").strip() or "none",
+        "prompt_version": _normalize_agent_prompt_version(prompt_version),
     }
 
 
@@ -2948,34 +3208,17 @@ def _agent_format_moods(moods: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _agent_build_system_prompt(*, persona: str, emotion: str, memories_text: str, tasks_text: str, moods_text: str, tool_context_text: str) -> str:
+def _agent_build_system_prompt(*, persona: str, emotion: str, memories_text: str, tasks_text: str, moods_text: str, tool_context_text: str, prompt_version: str | None = None) -> str:
     persona_prompt = _PERSONA_PROMPTS.get(persona, _PERSONA_PROMPTS["assistant"])
-    agent_prompt = f"""
-你現在是可用工具的 Agent 版本「陰晴」。
-你要把工具結果整合進回覆，但不能暴露內部工具規則或 JSON 流程。
-回覆時請優先：同理 -> 釐清 -> 一個最小可行下一步。
-情緒掃描只可當弱參考，若與使用者文字敘述衝突，請以使用者文字為主。
-禁止把「工具結果」四個字或內部欄位直接輸出給使用者。
-
-可用背景：
-[本次情緒]
-{emotion}
-
-[長期記憶]
-{memories_text}
-
-[目前任務]
-{tasks_text}
-
-[近期情緒紀錄]
-{moods_text}
-
-[工具結果]
-{tool_context_text}
-
-若工具結果有明確事實，請優先引用工具結果，不要憑空編造。
-若工具結果是空的，就照一般陪伴模式回覆。
-""".strip()
+    version = _normalize_agent_prompt_version(prompt_version or _get_active_agent_prompt_version())
+    template = _AGENT_PROMPT_VARIANTS.get(version, _AGENT_PROMPT_VARIANTS[_AGENT_DEFAULT_PROMPT_VERSION])
+    agent_prompt = template.format(
+        emotion=emotion,
+        memories_text=memories_text,
+        tasks_text=tasks_text,
+        moods_text=moods_text,
+        tool_context_text=tool_context_text,
+    )
     return persona_prompt + "\n\n" + agent_prompt
 
 
@@ -3072,6 +3315,7 @@ def generate():
             latency_ms=int((time.perf_counter() - request_started) * 1000),
             fallback_used=True,
             fallback_reason="rate_limit",
+            prompt_version=_get_active_agent_prompt_version(),
         )
         return jsonify({
             "error": "rate_limit",
@@ -3091,6 +3335,7 @@ def generate():
     persona = _resolve_persona(payload.get("persona", "courage_coach"))
     if persona == "assistant":
         persona = "courage_coach"
+    active_prompt_version = _get_active_agent_prompt_version()
     fallback_reply = _build_fallback_reply(emotion, persona)
 
     client = _get_groq_client()
@@ -3101,6 +3346,7 @@ def generate():
             latency_ms=int((time.perf_counter() - request_started) * 1000),
             fallback_used=True,
             fallback_reason="groq_unavailable",
+            prompt_version=active_prompt_version,
         )
         return jsonify({"error": "groq_unavailable", "fallback": fallback_reply, "observability": observability}), 503
 
@@ -3128,6 +3374,7 @@ def generate():
             latency_ms=int((time.perf_counter() - request_started) * 1000),
             fallback_used=True,
             fallback_reason="empty_messages",
+            prompt_version=active_prompt_version,
         )
         return jsonify({"error": "empty_messages", "fallback": "你好，我在這裡，有什麼想說的嗎？", "observability": observability}), 400
 
@@ -3163,6 +3410,7 @@ def generate():
             safety_mode="crisis",
             crisis_level=str(crisis_info.get("level", "medium")),
             crisis_phase=crisis_phase,
+            prompt_version=active_prompt_version,
         )
         if user_id and supabase_url and service_key:
             _agent_log_tool_execution(
@@ -3191,6 +3439,7 @@ def generate():
             "safety_mode": "crisis",
             "crisis_level": crisis_info.get("level", "medium"),
             "crisis_phase": crisis_phase,
+            "prompt_version": active_prompt_version,
             "observability": observability,
         })
 
@@ -3358,6 +3607,7 @@ def generate():
         tasks_text=tasks_text,
         moods_text=moods_text,
         tool_context_text=tool_context_text,
+        prompt_version=active_prompt_version,
     )
     groq_messages = [{"role": "system", "content": system_prompt}] + clean_messages
 
@@ -3388,6 +3638,7 @@ def generate():
             latency_ms=int((time.perf_counter() - request_started) * 1000),
             fallback_used=True,
             fallback_reason="groq_error",
+            prompt_version=active_prompt_version,
         )
         if user_id and supabase_url and service_key:
             _agent_log_turn_observability(
@@ -3418,6 +3669,7 @@ def generate():
         latency_ms=int((time.perf_counter() - request_started) * 1000),
         fallback_used=fallback_used,
         fallback_reason=fallback_reason,
+        prompt_version=active_prompt_version,
     )
     if user_id and supabase_url and service_key:
         _agent_log_turn_observability(
@@ -3432,6 +3684,7 @@ def generate():
         "reply": reply,
         "emotion": emotion,
         "persona": persona,
+        "prompt_version": active_prompt_version,
         "tool_results": tool_results,
         "observability": observability,
     })

@@ -222,6 +222,10 @@ create index if not exists agent_tool_logs_user_created_idx
 - `PATCH /agent/tasks/<id>`：更新任務狀態/優先級/內容
 - `POST /agent/tool-logs`：記錄工具呼叫
 - `GET /agent/tool-logs`：讀取工具呼叫紀錄
+- `GET /agent/prompt-version`：查看目前 prompt 版本
+- `POST /agent/prompt-version`：切換 prompt 版本（需 `X-Agent-Admin-Token`）
+- `GET /agent/daily-review`：產出每日回顧摘要
+- `POST /agent/followups/next-day`：建立隔天追蹤任務（可被排程器呼叫）
 
 ### Agent Step 7（可觀測 + 回歸測試）
 
@@ -232,6 +236,7 @@ create index if not exists agent_tool_logs_user_created_idx
 - `latency_ms`
 - `fallback_used` / `fallback_reason`
 - `safety_mode` / `crisis_level` / `crisis_phase`
+- `prompt_version`
 
 若使用者已登入（有 bearer token），後端也會把每回合摘要寫入 `agent_tool_logs`：
 
@@ -255,6 +260,38 @@ $env:AGENT_BASE_URL = "http://127.0.0.1:8000"
 
 & ".venv/Scripts/python.exe" regression/run_regression.py
 ```
+
+### Agent Step 8（產品化基線）
+
+#### 1) 每日回顧（可由排程器呼叫）
+
+`GET /agent/daily-review?days=1`
+
+- 從近期情緒、未完成任務、最近記憶彙整回顧
+- 回傳重點統計與 `recommended_step`
+
+#### 2) 隔天追蹤任務（可由排程器呼叫）
+
+`POST /agent/followups/next-day`
+
+- 會建立「隔天追蹤」任務（避免重複建立）
+- 可由外部 scheduler（例如 cron、Render Cron Job）每天觸發
+
+#### 3) Prompt 版本化與回滾
+
+- 讀取目前版本：`GET /agent/prompt-version`
+- 切換版本：`POST /agent/prompt-version` with `{ "version": "v1|v2" }`
+
+切換時需帶 header：
+
+```text
+X-Agent-Admin-Token: <AGENT_ADMIN_TOKEN>
+```
+
+建議在 Render 環境變數設定：
+
+- `AGENT_PROMPT_VERSION=v1`
+- `AGENT_ADMIN_TOKEN=<strong-random-token>`
 
 ### 啟用方式
 
