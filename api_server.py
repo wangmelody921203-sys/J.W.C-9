@@ -258,12 +258,28 @@ def _pick_crisis_lead(emotion: str, seed_text: str = "", previous_assistant: str
     return lead
 
 
+def _detect_crisis_phase(messages: list[dict]) -> str:
+    # 第一輪危機先以穩定為主；若對話中已連續出現危機訊號，再進入引導步驟。
+    user_texts = [
+        str(item.get("content", "")).strip()
+        for item in messages
+        if isinstance(item, dict) and item.get("role") == "user" and str(item.get("content", "")).strip()
+    ]
+    if len(user_texts) <= 1:
+        return "stabilize"
+
+    prior_user_texts = user_texts[:-1]
+    prior_crisis_count = sum(1 for text in prior_user_texts if _detect_crisis_signal(text).get("is_crisis"))
+    return "guide" if prior_crisis_count >= 1 else "stabilize"
+
+
 def _build_crisis_reply(
     level: str = "medium",
     emotion: str = "unknown",
     persona: str = "courage_coach",
     seed_text: str = "",
     previous_assistant: str = "",
+    phase: str = "guide",
 ) -> str:
     lead = _pick_crisis_lead(emotion=emotion, seed_text=seed_text, previous_assistant=previous_assistant)
 
@@ -281,6 +297,10 @@ def _build_crisis_reply(
         close = "你不用一個人扛，我會在這裡陪你到有人接住你。"
     else:
         close = "你不用一個人扛著，我會陪你把接下來 10 分鐘的第一步走完。"
+
+    if str(phase or "").strip().lower() == "stabilize":
+        stabilize_close = "你先不用一次想完全部，只要先做上面一件事就好，我會陪你。"
+        return f"{lead}\n\n{action}\n\n{stabilize_close}"
 
     return f"{lead}\n\n{action}\n\n{step}\n\n{close}"
 
@@ -3031,12 +3051,14 @@ def generate():
 
     crisis_info = _detect_crisis_signal(last_user_text)
     if crisis_info.get("is_crisis"):
+        crisis_phase = _detect_crisis_phase(clean_messages)
         safe_reply = _build_crisis_reply(
             level=str(crisis_info.get("level", "medium")),
             emotion=emotion,
             persona=persona,
             seed_text=last_user_text,
             previous_assistant=last_assistant_text,
+            phase=crisis_phase,
         )
         if user_id and supabase_url and service_key:
             _agent_log_tool_execution(
@@ -3046,7 +3068,7 @@ def generate():
                 tool_name="crisis_guardrail",
                 status="success",
                 input_text=json.dumps({"text": _agent_short_text(last_user_text, 300)}, ensure_ascii=False),
-                output_text=json.dumps({"level": crisis_info.get("level", "medium"), "matched": crisis_info.get("matched", [])}, ensure_ascii=False),
+                output_text=json.dumps({"level": crisis_info.get("level", "medium"), "phase": crisis_phase, "matched": crisis_info.get("matched", [])}, ensure_ascii=False),
                 error_text="",
                 latency_ms=0,
             )
@@ -3057,6 +3079,7 @@ def generate():
             "tool_results": [],
             "safety_mode": "crisis",
             "crisis_level": crisis_info.get("level", "medium"),
+            "crisis_phase": crisis_phase,
         })
 
     # 在 system prompt 後插入當次情緒脈絡（結構化，不直接拼接用戶輸入）

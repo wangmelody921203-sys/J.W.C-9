@@ -3483,7 +3483,11 @@
       return div;
     }
 
-    function petBuildCrisisModeNotice(level) {
+    function petBuildCrisisModeNotice(level, phase = "guide") {
+      const normalizedPhase = String(phase || "guide").toLowerCase();
+      if (normalizedPhase === "stabilize") {
+        return "安全保護模式已啟用：我會先用簡短回應穩住你，接著再陪你往下一步。";
+      }
       if (String(level || "").toLowerCase() === "high") {
         return "安全保護模式（高風險）已啟用：我會先以穩定情緒與人身安全為優先。";
       }
@@ -3550,6 +3554,7 @@
       let reply = petBuildFallback(petCurrentEmotion);
       let isCrisisMode = false;
       let crisisLevel = "";
+      let crisisPhase = "guide";
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 5000);
@@ -3569,6 +3574,7 @@
           reply = data.reply || data.fallback || reply;
           isCrisisMode = String(data.safety_mode || "").toLowerCase() === "crisis";
           crisisLevel = String(data.crisis_level || "").toLowerCase();
+          crisisPhase = String(data.crisis_phase || "guide").toLowerCase();
         } else {
           const data = await res.json().catch(() => ({}));
           reply = data.fallback || reply;
@@ -3581,7 +3587,7 @@
       if (isCrisisMode) {
         const showNotice = petLastSafetyMode !== "crisis" || petShouldShowCrisisNotice(crisisLevel);
         if (showNotice) {
-          petAppend("pet", petBuildCrisisModeNotice(crisisLevel), "crisis-note");
+          petAppend("pet", petBuildCrisisModeNotice(crisisLevel, crisisPhase), "crisis-note");
         }
         petAppend("pet", reply, "crisis-reply");
       } else {
