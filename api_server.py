@@ -194,19 +194,36 @@ def _detect_crisis_signal(raw: str) -> dict:
     return {"is_crisis": False, "level": "none", "matched": []}
 
 
-def _build_crisis_reply(level: str = "medium") -> str:
+def _build_crisis_reply(level: str = "medium", emotion: str = "unknown", persona: str = "courage_coach") -> str:
+    by_emotion = {
+        "sadness": "你現在這麼痛，還願意說出來，真的很不容易。",
+        "anger": "你現在又氣又受傷的感覺，我有接住，先不用壓抑它。",
+        "fear": "你現在的慌和不安很真實，我們先把你穩住。",
+        "disgust": "那種反感和耗盡的感覺很折磨，你辛苦了。",
+        "contempt": "你心裡的失望與疏離感，我有聽見。",
+        "uncertain": "現在腦中很亂、說不清楚也沒關係，我在這裡。",
+        "neutral": "謝謝你願意繼續說，我會先陪你把這一刻撐過去。",
+        "no_face": "我先不猜你的狀態，先把你的安全放第一位，我陪你。",
+        "unknown": "謝謝你願意說出來，我有在聽，先一起把這一刻撐過去。",
+    }
+    lead = by_emotion.get(str(emotion or "").strip().lower(), by_emotion["unknown"])
+
     if level == "high":
-        return (
-            "謝謝你願意說出來，這代表你正在很努力撐住。\n\n"
+        action = (
             "你現在的安全最重要。請立刻聯絡當地緊急服務（例如 119）或自殺防治專線 1925，"
-            "也請馬上通知一位你信任的人陪你。\n\n"
-            "如果你願意，我可以先陪你做一件最小的安全步驟：先離開讓你受傷的物品，然後傳訊息給一位你信任的人。"
+            "也請馬上通知一位你信任的人到你身邊。"
         )
-    return (
-        "我有聽見你現在真的很辛苦，謝謝你願意說出來。\n\n"
-        "先把安全放在第一位：建議你現在就聯絡一位可信任的人，或撥打 1925 尋求即時支持。\n\n"
-        "你不用一個人扛著，我可以陪你把接下來 10 分鐘要做的第一步整理清楚。"
-    )
+        step = "先做一個最小步驟：把會讓你受傷的物品移開，接著傳一句「我現在需要你陪我」給信任的人。"
+    else:
+        action = "先把安全放第一位：現在就聯絡一位可信任的人，或撥打 1925 尋求即時支持。"
+        step = "先做一件小事穩住自己：雙腳踩地、慢慢吐氣 6 次，然後把你現在的位置傳給一位信任的人。"
+
+    if persona == "companion":
+        close = "你不用一個人扛，我會在這裡陪你到有人接住你。"
+    else:
+        close = "你不用一個人扛著，我會陪你把接下來 10 分鐘的第一步走完。"
+
+    return f"{lead}\n\n{action}\n\n{step}\n\n{close}"
 
 _PERSONA_PROMPTS: dict[str, str] = {
     "assistant": """\
@@ -2949,7 +2966,11 @@ def generate():
 
     crisis_info = _detect_crisis_signal(last_user_text)
     if crisis_info.get("is_crisis"):
-        safe_reply = _build_crisis_reply(str(crisis_info.get("level", "medium")))
+        safe_reply = _build_crisis_reply(
+            level=str(crisis_info.get("level", "medium")),
+            emotion=emotion,
+            persona=persona,
+        )
         if user_id and supabase_url and service_key:
             _agent_log_tool_execution(
                 supabase_url=supabase_url,
