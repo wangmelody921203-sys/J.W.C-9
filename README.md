@@ -277,6 +277,36 @@ $env:AGENT_BASE_URL = "http://127.0.0.1:8000"
 - 會建立「隔天追蹤」任務（避免重複建立）
 - 可由外部 scheduler（例如 cron、Render Cron Job）每天觸發
 
+#### 2.5) 一鍵日任務腳本（每日回顧 + 隔天追蹤）
+
+- 腳本：`scheduler/run_daily_jobs.py`
+- Windows 快捷：`scheduler/run_daily_jobs.bat`
+
+必要環境變數：
+
+- `AGENT_BEARER_TOKEN=<使用者 token>`
+
+選填環境變數：
+
+- `AGENT_BASE_URL=http://127.0.0.1:8000`
+- `AGENT_DAILY_REVIEW_DAYS=1`
+
+手動執行：
+
+```powershell
+$env:AGENT_BEARER_TOKEN = "<your_token>"
+$env:AGENT_BASE_URL = "https://your-render-service.onrender.com"
+
+& ".venv/Scripts/python.exe" scheduler/run_daily_jobs.py
+```
+
+Windows 批次執行：
+
+```powershell
+$env:AGENT_BEARER_TOKEN = "<your_token>"
+./scheduler/run_daily_jobs.bat
+```
+
 #### 3) Prompt 版本化與回滾
 
 - 讀取目前版本：`GET /agent/prompt-version`
