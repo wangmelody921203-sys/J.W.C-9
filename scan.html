@@ -3017,6 +3017,45 @@
       return String(currentSession?.user?.id || "").trim();
     }
 
+    const PET_MEMORY_KIND_LABELS = {
+      profile: "人物背景",
+      preference: "偏好",
+      constraint: "限制",
+      goal: "目標",
+      event: "事件",
+      insight: "洞察",
+    };
+    const PET_MEMORY_KIND_ALIASES = {
+      profile: "profile",
+      "人物": "profile",
+      "人物背景": "profile",
+      "背景": "profile",
+      preference: "preference",
+      "偏好": "preference",
+      "喜好": "preference",
+      constraint: "constraint",
+      "限制": "constraint",
+      "界線": "constraint",
+      goal: "goal",
+      "目標": "goal",
+      event: "event",
+      "事件": "event",
+      insight: "insight",
+      "洞察": "insight",
+    };
+
+    function petNormalizeMemoryKind(raw) {
+      const key = String(raw || "").trim().toLowerCase();
+      if (PET_MEMORY_KIND_LABELS[key]) {
+        return key;
+      }
+      return PET_MEMORY_KIND_ALIASES[key] || "insight";
+    }
+
+    function petMemoryKindLabel(kind) {
+      return PET_MEMORY_KIND_LABELS[petNormalizeMemoryKind(kind)] || "洞察";
+    }
+
     function petMeaningfulMemory(text) {
       const value = String(text || "").trim();
       if (value.length < 8) {
@@ -3371,8 +3410,9 @@
         const meta = document.createElement("div");
         meta.className = "pet-memory-meta";
         const kind = String(memory.kind || "insight");
+        const kindLabel = petMemoryKindLabel(kind);
         const importance = Number(memory.importance || 50);
-        meta.textContent = `${kind} ・重要度 ${importance}`;
+        meta.textContent = `${kindLabel} ・重要度 ${importance}`;
 
         const content = document.createElement("div");
         content.className = "pet-memory-content";
@@ -3423,7 +3463,7 @@
           .filter((row) => row && row.id && row.content)
           .map((row) => ({
             id: String(row.id),
-            kind: String(row.kind || "insight"),
+            kind: petNormalizeMemoryKind(row.kind || "insight"),
             content: String(row.content || "").trim(),
             importance: Number(row.importance || 50),
             tags: Array.isArray(row.tags) ? row.tags : [],
@@ -3449,10 +3489,11 @@
         alert("記憶內容太短或太空泛，請至少 8 字並包含具體資訊。");
         return;
       }
-      const kind = window.prompt("記憶類型（profile/preference/constraint/goal/event/insight）", "insight");
-      if (kind === null) {
+      const kindInput = window.prompt("記憶類型（人物背景/偏好/限制/目標/事件/洞察）", "洞察");
+      if (kindInput === null) {
         return;
       }
+      const kind = petNormalizeMemoryKind(kindInput);
       const importanceRaw = window.prompt("重要度（0-100）", "70");
       if (importanceRaw === null) {
         return;
@@ -3467,7 +3508,7 @@
         await petAgentApi("/agent/memories", {
           method: "POST",
           body: JSON.stringify({
-            kind: String(kind || "insight").trim() || "insight",
+            kind,
             content: String(content || "").trim(),
             importance,
             source: "manual_curation",
@@ -3492,10 +3533,11 @@
         alert("記憶內容太短或太空泛，請至少 8 字並包含具體資訊。");
         return;
       }
-      const kind = window.prompt("記憶類型", target.kind || "insight");
-      if (kind === null) {
+      const kindInput = window.prompt("記憶類型（人物背景/偏好/限制/目標/事件/洞察）", petMemoryKindLabel(target.kind || "insight"));
+      if (kindInput === null) {
         return;
       }
+      const kind = petNormalizeMemoryKind(kindInput);
       const importanceRaw = window.prompt("重要度（0-100）", String(target.importance || 50));
       if (importanceRaw === null) {
         return;
@@ -3511,7 +3553,7 @@
           method: "PATCH",
           body: JSON.stringify({
             content: String(content || "").trim(),
-            kind: String(kind || "insight").trim() || "insight",
+            kind,
             importance,
           }),
         });

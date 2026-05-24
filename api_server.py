@@ -240,6 +240,24 @@ _ALLOWED_AGENT_MEMORY_KINDS = {
     "event",
     "insight",
 }
+_AGENT_MEMORY_KIND_ALIASES = {
+    "profile": "profile",
+    "人物": "profile",
+    "人物背景": "profile",
+    "背景": "profile",
+    "preference": "preference",
+    "偏好": "preference",
+    "喜好": "preference",
+    "constraint": "constraint",
+    "限制": "constraint",
+    "界線": "constraint",
+    "goal": "goal",
+    "目標": "goal",
+    "event": "event",
+    "事件": "event",
+    "insight": "insight",
+    "洞察": "insight",
+}
 _ALLOWED_AGENT_TASK_STATUS = {"open", "in_progress", "done", "cancelled"}
 _ALLOWED_AGENT_TASK_PRIORITY = {"low", "normal", "high"}
 
@@ -321,7 +339,9 @@ def _normalize_chat_title(raw: str) -> str:
 
 def _normalize_agent_memory_kind(raw: str) -> str:
     kind = str(raw or "").strip().lower()
-    return kind if kind in _ALLOWED_AGENT_MEMORY_KINDS else "insight"
+    if kind in _ALLOWED_AGENT_MEMORY_KINDS:
+        return kind
+    return _AGENT_MEMORY_KIND_ALIASES.get(kind, "insight")
 
 
 def _normalize_agent_task_status(raw: str) -> str:
