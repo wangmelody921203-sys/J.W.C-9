@@ -2772,6 +2772,87 @@ def _agent_build_daily_review_payload(*, moods: list[dict], tasks: list[dict], m
     }
 
 
+def _agent_ensure_next_day_followup_task(*, supabase_url: str, service_key: str, user_id: str, mode: str = "manual_or_scheduler") -> tuple[dict | None, bool, str | None]:
+    tasks = _agent_list_open_tasks(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        limit=20,
+    )
+    for row in tasks:
+        title = str(row.get("title", "")).strip()
+        if "隔天追蹤" in title:
+            return row, False, None
+
+    due_at = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=1, minute=0, second=0, microsecond=0).isoformat()
+    title = "隔天追蹤：回看昨天的小步驟是否完成"
+    details = "請先回顧昨天承諾的一個最小步驟，若未完成，拆成更小的 10 分鐘行動並重新安排。"
+    task, error = _agent_create_task(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        title=title,
+        details=details,
+        priority="normal",
+        source="scheduled_followup",
+        due_at=due_at,
+    )
+    if error:
+        return None, False, error
+
+    _agent_log_tool_execution(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        tool_name="next_day_followup_job",
+        status="success",
+        input_text=json.dumps({"mode": mode}, ensure_ascii=False),
+        output_text=json.dumps({"task_id": (task or {}).get("id", "")}, ensure_ascii=False),
+        error_text="",
+        latency_ms=0,
+    )
+    return task, True, None
+
+
+def _agent_collect_active_user_ids(*, supabase_url: str, service_key: str, lookback_days: int, max_users: int) -> list[str]:
+    since = (datetime.now(timezone.utc) - timedelta(days=max(1, lookback_days))).isoformat()
+    candidates: list[str] = []
+
+    queries = [
+        ("/rest/v1/chat_sessions", {"select": "user_id", "updated_at": f"gte.{since}", "order": "updated_at.desc,id.desc", "limit": str(max_users * 3)}),
+        ("/rest/v1/agent_tasks", {"select": "user_id", "updated_at": f"gte.{since}", "order": "updated_at.desc,id.desc", "limit": str(max_users * 3)}),
+        ("/rest/v1/mood_entries", {"select": "user_id", "detected_at": f"gte.{since}", "order": "detected_at.desc,created_at.desc,id.desc", "limit": str(max_users * 3)}),
+    ]
+
+    for path, query in queries:
+        status, data = _supabase_rest_request(
+            method="GET",
+            path=path,
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query=query,
+        )
+        if status != 200 or not isinstance(data, list):
+            continue
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            user_id = str(row.get("user_id", "")).strip()
+            if user_id:
+                candidates.append(user_id)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for user_id in candidates:
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        deduped.append(user_id)
+        if len(deduped) >= max_users:
+            break
+    return deduped
+
+
 @app.get("/agent/daily-review")
 def agent_daily_review_get():
     supabase_url, service_key, user_id = _resolve_authed_user()
@@ -2821,51 +2902,101 @@ def agent_next_day_followup_create():
             return jsonify({"error": "missing_bearer"}), 401
         return jsonify({"error": "invalid_token"}), 401
 
-    tasks = _agent_list_open_tasks(
+    task, created, error = _agent_ensure_next_day_followup_task(
         supabase_url=supabase_url,
         service_key=service_key,
         user_id=user_id,
-        limit=20,
-    )
-    duplicate = None
-    for row in tasks:
-        title = str(row.get("title", "")).strip()
-        if "隔天追蹤" in title:
-            duplicate = row
-            break
-
-    if duplicate:
-        return jsonify({"ok": True, "created": False, "task": duplicate, "reason": "already_exists"})
-
-    due_at = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=1, minute=0, second=0, microsecond=0).isoformat()
-    title = "隔天追蹤：回看昨天的小步驟是否完成"
-    details = "請先回顧昨天承諾的一個最小步驟，若未完成，拆成更小的 10 分鐘行動並重新安排。"
-    task, error = _agent_create_task(
-        supabase_url=supabase_url,
-        service_key=service_key,
-        user_id=user_id,
-        title=title,
-        details=details,
-        priority="normal",
-        source="scheduled_followup",
-        due_at=due_at,
+        mode="manual_or_scheduler",
     )
     if error:
         return jsonify({"error": "create_followup_failed", "details": error}), 502
+    if not created:
+        return jsonify({"ok": True, "created": False, "task": task, "reason": "already_exists"})
+    return jsonify({"ok": True, "created": True, "task": task}), 201
 
-    _agent_log_tool_execution(
+
+@app.post("/agent/jobs/daily-batch")
+def agent_jobs_daily_batch_create():
+    if not _is_admin_request():
+        return jsonify({"error": "forbidden", "details": "missing_or_invalid_admin_token"}), 403
+
+    supabase_url, service_key = _get_supabase_config()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        lookback_days = max(1, min(30, int(payload.get("lookback_days", 2))))
+    except (TypeError, ValueError):
+        lookback_days = 2
+    try:
+        max_users = max(1, min(500, int(payload.get("max_users", 100))))
+    except (TypeError, ValueError):
+        max_users = 100
+    dry_run = bool(payload.get("dry_run", False))
+    create_followups = bool(payload.get("create_followups", True))
+
+    user_ids = _agent_collect_active_user_ids(
         supabase_url=supabase_url,
         service_key=service_key,
-        user_id=user_id,
-        tool_name="next_day_followup_job",
-        status="success",
-        input_text=json.dumps({"mode": "manual_or_scheduler"}, ensure_ascii=False),
-        output_text=json.dumps({"task_id": (task or {}).get("id", "")}, ensure_ascii=False),
-        error_text="",
-        latency_ms=0,
+        lookback_days=lookback_days,
+        max_users=max_users,
     )
 
-    return jsonify({"ok": True, "created": True, "task": task}), 201
+    results: list[dict] = []
+    followups_created = 0
+    followups_existing = 0
+    errors_count = 0
+
+    for user_id in user_ids:
+        moods = _agent_list_recent_moods(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=7)
+        tasks = _agent_list_open_tasks(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=8)
+        memories = _agent_list_recent_memories(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=5)
+        review = _agent_build_daily_review_payload(moods=moods, tasks=tasks, memories=memories, days=min(7, lookback_days))
+
+        row = {
+            "user_id": user_id,
+            "review": review,
+            "followup_created": False,
+            "followup_reason": "skipped",
+        }
+        followup_error = ""
+        followup_task = None
+        if create_followups:
+            if dry_run:
+                row["followup_reason"] = "dry_run"
+            else:
+                followup_task, created, followup_error = _agent_ensure_next_day_followup_task(
+                    supabase_url=supabase_url,
+                    service_key=service_key,
+                    user_id=user_id,
+                    mode="admin_batch",
+                )
+                if followup_error:
+                    row["followup_reason"] = f"error:{followup_error}"
+                    errors_count += 1
+                elif created:
+                    row["followup_created"] = True
+                    row["followup_reason"] = "created"
+                    followups_created += 1
+                else:
+                    row["followup_reason"] = "already_exists"
+                    followups_existing += 1
+                if isinstance(followup_task, dict):
+                    row["followup_task_id"] = str(followup_task.get("id", "")).strip()
+        results.append(row)
+
+    return jsonify({
+        "ok": True,
+        "dry_run": dry_run,
+        "lookback_days": lookback_days,
+        "max_users": max_users,
+        "user_count": len(user_ids),
+        "followups_created": followups_created,
+        "followups_existing": followups_existing,
+        "errors_count": errors_count,
+        "results": results,
+    })
 
 
 def _agent_short_text(value: str, limit: int = 220) -> str:

@@ -277,6 +277,23 @@ $env:AGENT_BASE_URL = "http://127.0.0.1:8000"
 - 會建立「隔天追蹤」任務（避免重複建立）
 - 可由外部 scheduler（例如 cron、Render Cron Job）每天觸發
 
+#### 2.1) 管理員批次日任務（建議正式環境使用）
+
+`POST /agent/jobs/daily-batch`
+
+- 需 header：`X-Agent-Admin-Token`
+- 由後端用 service role 自動找活躍使用者並批次執行
+- 不需要逐位使用者 token
+
+可調參數（JSON body）：
+
+- `lookback_days`（1-30，預設 2）
+- `max_users`（1-500，預設 100）
+- `dry_run`（預設 false）
+- `create_followups`（預設 true）
+
+回傳包含：`user_count`、`followups_created`、`followups_existing`、`errors_count`
+
 #### 2.5) 一鍵日任務腳本（每日回顧 + 隔天追蹤）
 
 - 腳本：`scheduler/run_daily_jobs.py`
@@ -305,6 +322,31 @@ Windows 批次執行：
 ```powershell
 $env:AGENT_BEARER_TOKEN = "<your_token>"
 ./scheduler/run_daily_jobs.bat
+```
+
+#### 2.6) 一鍵管理員批次腳本（全體活躍使用者）
+
+- 腳本：`scheduler/run_admin_daily_batch.py`
+- Windows 快捷：`scheduler/run_admin_daily_batch.bat`
+
+必要環境變數：
+
+- `AGENT_ADMIN_TOKEN=<admin_token>`
+
+選填環境變數：
+
+- `AGENT_BASE_URL=https://your-render-service.onrender.com`
+- `AGENT_BATCH_LOOKBACK_DAYS=2`
+- `AGENT_BATCH_MAX_USERS=100`
+- `AGENT_BATCH_DRY_RUN=false`
+
+執行範例：
+
+```powershell
+$env:AGENT_ADMIN_TOKEN = "<admin_token>"
+$env:AGENT_BASE_URL = "https://your-render-service.onrender.com"
+
+./scheduler/run_admin_daily_batch.bat
 ```
 
 #### 3) Prompt 版本化與回滾
