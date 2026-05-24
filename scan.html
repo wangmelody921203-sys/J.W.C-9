@@ -1402,6 +1402,68 @@
       no_face: "Lo-fi 電子",
     };
 
+    const MOOD_PRESCRIPTION_PATHS = {
+      anger: {
+        title: "先發洩再平復",
+        phases: [
+          { key: "anger", label: "階段 1：釋放張力", count: 1 },
+          { key: "happiness", label: "階段 2：導向輕快", count: 2 },
+        ],
+      },
+      disgust: {
+        title: "先發洩再平復",
+        phases: [
+          { key: "disgust", label: "階段 1：釋放張力", count: 1 },
+          { key: "happiness", label: "階段 2：導向輕快", count: 2 },
+        ],
+      },
+      sadness: {
+        title: "先接住再提振",
+        phases: [
+          { key: "sadness", label: "階段 1：情緒接住", count: 1 },
+          { key: "happiness", label: "階段 2：逐步提振", count: 2 },
+        ],
+      },
+      fear: {
+        title: "先安定再回穩",
+        phases: [
+          { key: "fear", label: "階段 1：降低警覺", count: 1 },
+          { key: "uncertain", label: "階段 2：回到穩定", count: 2 },
+        ],
+      },
+      contempt: {
+        title: "先釋放再柔化",
+        phases: [
+          { key: "contempt", label: "階段 1：釋放張力", count: 1 },
+          { key: "happiness", label: "階段 2：導向柔和", count: 2 },
+        ],
+      },
+      happiness: {
+        title: "維持正向流動",
+        phases: [
+          { key: "happiness", label: "維持正向", count: 3 },
+        ],
+      },
+      uncertain: {
+        title: "先穩定再觀察",
+        phases: [
+          { key: "uncertain", label: "穩定心流", count: 3 },
+        ],
+      },
+      unknown: {
+        title: "先穩定再觀察",
+        phases: [
+          { key: "uncertain", label: "穩定心流", count: 3 },
+        ],
+      },
+      no_face: {
+        title: "先穩定再觀察",
+        phases: [
+          { key: "uncertain", label: "穩定心流", count: 3 },
+        ],
+      },
+    };
+
     const MUSIC_CATEGORY_BY_TRACK_ID = {
       "0VjIjW4GlUZAMYd2vXMi3b": "Synth-pop",
       "463CkQjx2Zk1yXoBuierM9": "Disco Pop",
@@ -1475,6 +1537,30 @@
         [copy[i], copy[j]] = [copy[j], copy[i]];
       }
       return copy;
+    }
+
+    function getMoodPrescriptionPath(emotion) {
+      return MOOD_PRESCRIPTION_PATHS[emotion] || MOOD_PRESCRIPTION_PATHS.unknown;
+    }
+
+    function pickSongsByPhase(phase, usedIds = new Set()) {
+      const pool = MUSIC_POOLS[phase.key] || MUSIC_POOLS.uncertain;
+      const shuffled = shuffle(pool);
+      const picked = [];
+
+      for (let i = 0; i < shuffled.length && picked.length < phase.count; i += 1) {
+        const song = shuffled[i];
+        const id = String(song.id || "").trim();
+        if (id && usedIds.has(id)) {
+          continue;
+        }
+        if (id) {
+          usedIds.add(id);
+        }
+        picked.push({ ...song, phase_label: phase.label, phase_key: phase.key });
+      }
+
+      return picked;
     }
 
     function getMusicClickStats() {
@@ -1874,12 +1960,29 @@
     }
 
     function renderMusic(emotion) {
-      const pool = MUSIC_POOLS[emotion] || MUSIC_POOLS.uncertain;
-      const selected = shuffle(pool).slice(0, MUSIC_CARD_COUNT);
+      const path = getMoodPrescriptionPath(emotion);
+      const usedIds = new Set();
+      const selected = [];
+
+      path.phases.forEach((phase) => {
+        const phaseSongs = pickSongsByPhase(phase, usedIds);
+        selected.push(...phaseSongs);
+      });
+
+      if (selected.length < MUSIC_CARD_COUNT) {
+        const fallback = pickSongsByPhase(
+          { key: emotion, label: "補齊推薦", count: MUSIC_CARD_COUNT - selected.length },
+          usedIds
+        );
+        selected.push(...fallback);
+      }
+
+      const limited = selected.slice(0, MUSIC_CARD_COUNT);
       musicGrid.innerHTML = "";
-      selected.forEach((item) => {
+      limited.forEach((item) => {
         const category = resolveSongCategory(item, emotion);
         const categorySourceText = resolveSongCategorySourceText(item, emotion);
+        const phaseText = item.phase_label || "單階段推薦";
         const embedPath = `https://open.spotify.com/embed/${item.type}/${item.id}?utm_source=generator&theme=0`;
         const openPath = `https://open.spotify.com/${item.type}/${item.id}`;
         const article = document.createElement("article");
@@ -1894,6 +1997,7 @@
           <div class="music-card-footer">
             <div class="music-meta">
               <span class="music-name" title="${item.title}">${item.title}</span>
+              <span class="music-category" title="${phaseText}">${phaseText}</span>
               <span class="music-category" title="${category}">類型：${category}</span>
               <span class="music-category" title="${categorySourceText}">${categorySourceText}</span>
             </div>
@@ -1908,8 +2012,8 @@
         }
         musicGrid.appendChild(article);
       });
-      musicSubtitle.textContent = `本輪依 ${EMOTION_LABELS_ZH[emotion] || "未知"} 情緒隨機抽出 ${selected.length} 首，不再固定同一組歌單。`;
-      return selected.map((song) => ({
+      musicSubtitle.textContent = `本輪採用「${path.title}」處方路徑：先 ${path.phases[0].label}${path.phases[1] ? `，再 ${path.phases[1].label}` : ""}。`;
+      return limited.map((song) => ({
         ...song,
         category: resolveSongCategory(song, emotion),
         category_source: resolveSongCategoryMeta(song, emotion).source,
@@ -3410,9 +3514,13 @@
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 5000);
+        const headers = { "Content-Type": "application/json" };
+        if (currentSession?.access_token) {
+          headers["Authorization"] = `Bearer ${currentSession.access_token}`;
+        }
         const res = await fetch(`${API_BASE}/generate`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify({
             emotion: petCurrentEmotion,
             persona: petPersona,
@@ -3521,15 +3629,12 @@
       if (!window.confirm("確定要刪除這個聊天室嗎？")) {
         return;
       }
-      // 在本地刪除前先記錄目前的 ID（本地刪除後 petCurrentSessionId 會改變）
-      const targetId = petCurrentSessionId;
       // 先刪除本地會話（立即可用）
       petDeleteCurrentLocalSession();
-      // 若登入且雲端可用，用原始 targetId 刪除雲端對應 session
-      if (petCanUseCloud() && targetId && !targetId.startsWith("local-")) {
+      // 若登入且雲端可用，嘗試同步刪除（背景進行，不阻擋 UI）
+      if (petCanUseCloud()) {
         try {
-          await petSupabaseDeleteSession(targetId);
-          await petLoadCloudSessions(true);
+          await petDeleteCurrentCloudSession();
         } catch (err) {
           console.warn("[pet] cloud session deletion failed, but local deleted:", err);
           // 雲端失敗，本地已刪除

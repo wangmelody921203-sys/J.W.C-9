@@ -1836,6 +1836,241 @@ def agent_tool_logs_list():
     return jsonify({"ok": True, "tool_logs": rows})
 
 
+def _agent_short_text(value: str, limit: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    return text[:limit]
+
+
+def _agent_list_recent_memories(*, supabase_url: str, service_key: str, user_id: str, limit: int = 5) -> list[dict]:
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+            "user_id": f"eq.{user_id}",
+            "order": "importance.desc,updated_at.desc,created_at.desc,id.desc",
+            "limit": str(max(1, min(10, limit))),
+        },
+    )
+    if status != 200:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _agent_list_open_tasks(*, supabase_url: str, service_key: str, user_id: str, limit: int = 5) -> list[dict]:
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_tasks",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,title,details,status,priority,due_at,done_at,source,created_at,updated_at",
+            "user_id": f"eq.{user_id}",
+            "status": "in.(open,in_progress)",
+            "order": "updated_at.desc,created_at.desc,id.desc",
+            "limit": str(max(1, min(10, limit))),
+        },
+    )
+    if status != 200:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _agent_list_recent_moods(*, supabase_url: str, service_key: str, user_id: str, limit: int = 7) -> list[dict]:
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/mood_entries",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,detected_at,emotion,share,created_at",
+            "user_id": f"eq.{user_id}",
+            "order": "detected_at.desc,created_at.desc,id.desc",
+            "limit": str(max(1, min(10, limit))),
+        },
+    )
+    if status != 200:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _agent_create_memory(*, supabase_url: str, service_key: str, user_id: str, kind: str, content: str, importance: int = 50, tags: list[str] | None = None, source: str = "agent", session_id: str | None = None) -> tuple[dict | None, str | None]:
+    now_iso = _utc_now_iso()
+    payload = {
+        "user_id": user_id,
+        "kind": _normalize_agent_memory_kind(kind),
+        "content": _agent_short_text(content, AGENT_MEMORY_CONTENT_LIMIT),
+        "importance": max(0, min(100, int(importance))),
+        "tags": [str(tag).strip()[:40] for tag in (tags or []) if str(tag).strip()],
+        "source": str(source or "agent").strip()[:40] or "agent",
+        "session_id": str(session_id).strip() if session_id else None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    status, data = _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        payload=payload,
+        prefer="return=representation",
+    )
+    if status not in (200, 201):
+        return None, f"supabase_insert_failed:{data}"
+    rows = data if isinstance(data, list) else []
+    return (rows[0] if rows else None), None
+
+
+def _agent_create_task(*, supabase_url: str, service_key: str, user_id: str, title: str, details: str = "", priority: str = "normal", source: str = "agent", due_at: str | None = None) -> tuple[dict | None, str | None]:
+    now_iso = _utc_now_iso()
+    payload = {
+        "user_id": user_id,
+        "title": _agent_short_text(title, AGENT_TASK_TITLE_LIMIT),
+        "details": _agent_short_text(details, AGENT_TASK_DETAILS_LIMIT),
+        "status": "open",
+        "priority": _normalize_agent_task_priority(priority),
+        "due_at": str(due_at).strip() if due_at else None,
+        "done_at": None,
+        "source": str(source or "agent").strip()[:40] or "agent",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    if payload["title"] == "":
+        return None, "empty_title"
+    status, data = _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/agent_tasks",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        payload=payload,
+        prefer="return=representation",
+    )
+    if status not in (200, 201):
+        return None, f"supabase_insert_failed:{data}"
+    rows = data if isinstance(data, list) else []
+    return (rows[0] if rows else None), None
+
+
+def _agent_log_tool_execution(*, supabase_url: str, service_key: str, user_id: str, tool_name: str, status: str, input_text: str = "", output_text: str = "", error_text: str = "", latency_ms: int = 0) -> None:
+    now_iso = _utc_now_iso()
+    _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/agent_tool_logs",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        payload={
+            "user_id": user_id,
+            "tool_name": str(tool_name or "").strip()[:80] or "unknown",
+            "status": status if status in {"success", "error", "skipped"} else "success",
+            "input": _agent_short_text(input_text, AGENT_TOOL_LOG_TEXT_LIMIT),
+            "output": _agent_short_text(output_text, AGENT_TOOL_LOG_TEXT_LIMIT),
+            "error": _agent_short_text(error_text, AGENT_TOOL_LOG_TEXT_LIMIT),
+            "latency_ms": max(0, int(latency_ms)),
+            "created_at": now_iso,
+        },
+        prefer="return=minimal",
+    )
+
+
+def _agent_pick_tool_calls(last_user_text: str) -> list[dict]:
+    text = str(last_user_text or "").strip()
+    lowered = text.lower()
+    calls: list[dict] = []
+
+    wants_memory = any(keyword in text for keyword in ("記住", "記下", "幫我記", "幫我保存", "記錄", "別忘了")) or "remember" in lowered
+    wants_tasks = any(keyword in text for keyword in ("待辦", "任務", "提醒", "提醒我", "安排", "幫我做", "工作清單"))
+    wants_moods = any(keyword in text for keyword in ("最近", "近幾天", "近七天", "情緒", "心情", "狀態", "趨勢", "波動"))
+    wants_list_tasks = any(keyword in text for keyword in ("有哪些待辦", "列出待辦", "列出任務", "目前任務", "我的任務"))
+
+        if wants_moods:
+                calls.append({"name": "get_recent_moods", "arguments": {"limit": 7}})
+        if wants_list_tasks:
+                calls.append({"name": "list_open_tasks", "arguments": {"limit": 8}})
+        elif wants_tasks:
+                calls.append({"name": "create_task", "arguments": {"title": text, "details": text, "priority": "normal"}})
+        if wants_memory:
+                calls.append({"name": "remember_memory", "arguments": {"content": text, "kind": "insight"}})
+
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for call in calls:
+        name = str(call.get("name", "")).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        deduped.append(call)
+    return deduped[:3]
+
+
+def _agent_format_memories(memories: list[dict]) -> str:
+    if not memories:
+        return "- 無"
+    lines = []
+    for row in memories[:5]:
+        content = _agent_short_text(row.get("content", ""), 140)
+        kind = str(row.get("kind", "insight")).strip()
+        importance = row.get("importance", 50)
+        lines.append(f"- [{kind} / {importance}] {content}")
+    return "\n".join(lines)
+
+
+def _agent_format_tasks(tasks: list[dict]) -> str:
+    if not tasks:
+        return "- 無"
+    lines = []
+    for row in tasks[:5]:
+        title = _agent_short_text(row.get("title", ""), 120)
+        status = str(row.get("status", "open")).strip()
+        priority = str(row.get("priority", "normal")).strip()
+        due_at = str(row.get("due_at", "")).strip()
+        suffix = f" / due {due_at}" if due_at else ""
+        lines.append(f"- [{status}/{priority}] {title}{suffix}")
+    return "\n".join(lines)
+
+
+def _agent_format_moods(moods: list[dict]) -> str:
+    if not moods:
+        return "- 無"
+    lines = []
+    for row in moods[:5]:
+        detected_at = _agent_short_text(row.get("detected_at", ""), 24)
+        emotion = str(row.get("emotion", "unknown")).strip()
+        share = row.get("share", 0)
+        lines.append(f"- [{detected_at}] {emotion} / share={share}")
+    return "\n".join(lines)
+
+
+def _agent_build_system_prompt(*, persona: str, emotion: str, memories_text: str, tasks_text: str, moods_text: str, tool_context_text: str) -> str:
+    persona_prompt = _PERSONA_PROMPTS.get(persona, _PERSONA_PROMPTS["assistant"])
+    agent_prompt = f"""
+你現在是可用工具的 Agent 版本「陰晴」。
+你要把工具結果整合進回覆，但不能暴露內部工具規則或 JSON 流程。
+回覆時請優先：同理 -> 釐清 -> 一個最小可行下一步。
+
+可用背景：
+[本次情緒]
+{emotion}
+
+[長期記憶]
+{memories_text}
+
+[目前任務]
+{tasks_text}
+
+[近期情緒紀錄]
+{moods_text}
+
+[工具結果]
+{tool_context_text}
+
+若工具結果有明確事實，請優先引用工具結果，不要憑空編造。
+若工具結果是空的，就照一般陪伴模式回覆。
+""".strip()
+    return persona_prompt + "\n\n" + agent_prompt
+
+
 @app.post("/detect")
 def detect():
     ready, init_error = _ensure_detection_runtime()
@@ -1925,6 +2160,7 @@ def generate():
         return jsonify({"error": "rate_limit", "fallback": "我需要稍微休息一下，等等再來找我吧 🌙"}), 429
 
     payload = request.get_json(silent=True) or {}
+    supabase_url, service_key, user_id = _resolve_authed_user()
 
     # 驗證 emotion（白名單，防注入）
     emotion = str(payload.get("emotion", "unknown")).strip().lower()
@@ -1959,12 +2195,127 @@ def generate():
     if not clean_messages:
         return jsonify({"error": "empty_messages", "fallback": "你好，我在這裡，有什麼想說的嗎？"}), 400
 
+    last_user_text = ""
+    for m in reversed(clean_messages):
+        if m.get("role") == "user":
+            last_user_text = str(m.get("content", "")).strip()
+            break
+
     # 在 system prompt 後插入當次情緒脈絡（結構化，不直接拼接用戶輸入）
     emotion_context = f"[本次掃描偵測到的情緒：{emotion}]"
-    system_prompt = _PERSONA_PROMPTS[persona]
-    system_with_context = system_prompt + f"\n\n{emotion_context}"
+    memories_rows: list[dict] = []
+    tasks_rows: list[dict] = []
+    moods_rows: list[dict] = []
+    if user_id and supabase_url and service_key:
+        memories_rows = _agent_list_recent_memories(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=5)
+        tasks_rows = _agent_list_open_tasks(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=5)
+        moods_rows = _agent_list_recent_moods(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=5)
 
-    groq_messages = [{"role": "system", "content": system_with_context}] + clean_messages
+    tool_calls = _agent_pick_tool_calls(last_user_text) if user_id and supabase_url and service_key else []
+    tool_results: list[dict] = []
+    for tool_call in tool_calls:
+        tool_name = str(tool_call.get("name", "")).strip()
+        arguments = tool_call.get("arguments", {}) if isinstance(tool_call.get("arguments", {}), dict) else {}
+        start_at = time.perf_counter()
+        status_text = "success"
+        output_text = ""
+        error_text = ""
+        result_payload: dict | list | None = None
+        try:
+            if tool_name == "get_recent_moods":
+                limit = int(arguments.get("limit", 7) or 7)
+                result_payload = _agent_list_recent_moods(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=limit)
+            elif tool_name == "list_open_tasks":
+                limit = int(arguments.get("limit", 5) or 5)
+                result_payload = _agent_list_open_tasks(supabase_url=supabase_url, service_key=service_key, user_id=user_id, limit=limit)
+            elif tool_name == "create_task":
+                result_payload, error_text = _agent_create_task(
+                    supabase_url=supabase_url,
+                    service_key=service_key,
+                    user_id=user_id,
+                    title=str(arguments.get("title", last_user_text) or last_user_text),
+                    details=str(arguments.get("details", last_user_text) or last_user_text),
+                    priority=str(arguments.get("priority", "normal")),
+                    source="generate_tool",
+                )
+                if error_text:
+                    status_text = "error"
+            elif tool_name == "remember_memory":
+                result_payload, error_text = _agent_create_memory(
+                    supabase_url=supabase_url,
+                    service_key=service_key,
+                    user_id=user_id,
+                    kind=str(arguments.get("kind", "insight")),
+                    content=str(arguments.get("content", last_user_text) or last_user_text),
+                    importance=int(arguments.get("importance", 60) or 60),
+                    tags=["agent", "auto"],
+                    source="generate_tool",
+                )
+                if error_text:
+                    status_text = "error"
+            else:
+                status_text = "skipped"
+                error_text = "unknown_tool"
+        except Exception as exc:
+            status_text = "error"
+            error_text = str(exc)
+        elapsed_ms = int((time.perf_counter() - start_at) * 1000)
+        if result_payload is not None and not error_text:
+            if isinstance(result_payload, dict):
+                output_text = json.dumps(result_payload, ensure_ascii=False)
+            else:
+                output_text = json.dumps(result_payload, ensure_ascii=False)
+        _agent_log_tool_execution(
+            supabase_url=supabase_url,
+            service_key=service_key,
+            user_id=user_id,
+            tool_name=tool_name,
+            status=status_text,
+            input_text=json.dumps(arguments, ensure_ascii=False),
+            output_text=output_text,
+            error_text=error_text,
+            latency_ms=elapsed_ms,
+        )
+        tool_results.append(
+            {
+                "name": tool_name,
+                "status": status_text,
+                "result": result_payload,
+                "error": error_text,
+            }
+        )
+
+    memories_text = _agent_format_memories(memories_rows)
+    tasks_text = _agent_format_tasks(tasks_rows)
+    moods_text = _agent_format_moods(moods_rows)
+    tool_context_lines = []
+    for item in tool_results:
+        name = str(item.get("name", "unknown")).strip()
+        status_text = str(item.get("status", "success")).strip()
+        result_value = item.get("result")
+        error_value = str(item.get("error", "")).strip()
+        if result_value is None and not error_value:
+            tool_context_lines.append(f"- {name}: {status_text}")
+            continue
+        if isinstance(result_value, (dict, list)):
+            compact = json.dumps(result_value, ensure_ascii=False)
+        else:
+            compact = _agent_short_text(str(result_value or ""), 500)
+        if error_value:
+            tool_context_lines.append(f"- {name}: {status_text} / {error_value}")
+        else:
+            tool_context_lines.append(f"- {name}: {status_text} / {compact}")
+    tool_context_text = "\n".join(tool_context_lines) if tool_context_lines else "- 無"
+
+    system_prompt = _agent_build_system_prompt(
+        persona=persona,
+        emotion=emotion_context,
+        memories_text=memories_text,
+        tasks_text=tasks_text,
+        moods_text=moods_text,
+        tool_context_text=tool_context_text,
+    )
+    groq_messages = [{"role": "system", "content": system_prompt}] + clean_messages
 
     reply = ""
     last_error = None
@@ -1973,9 +2324,9 @@ def generate():
             completion = client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=groq_messages,
-                max_tokens=220,       # 提高上限，避免回覆半句被截斷
+                max_tokens=260,
                 temperature=0.7,
-                timeout=8.0,          # 放寬超時，降低截斷率
+                timeout=8.0,
             )
             reply = _format_reply_for_readability(completion.choices[0].message.content)
             if reply:
@@ -1987,12 +2338,17 @@ def generate():
 
     if not reply and last_error is not None:
         app.logger.exception("Groq generate failed", exc_info=last_error)
-        return jsonify({"error": "groq_error", "fallback": fallback_reply}), 500
+        fallback_payload = {
+            "error": "groq_error",
+            "fallback": fallback_reply,
+            "tool_results": tool_results,
+        }
+        return jsonify(fallback_payload), 500
 
     if not reply:
         reply = fallback_reply
 
-    return jsonify({"reply": reply, "emotion": emotion, "persona": persona})
+    return jsonify({"reply": reply, "emotion": emotion, "persona": persona, "tool_results": tool_results})
 
 
 @app.post("/feedback")
