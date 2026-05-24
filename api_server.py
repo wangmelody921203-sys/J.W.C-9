@@ -1703,6 +1703,156 @@ def agent_memories_list():
     return jsonify({"ok": True, "memories": rows})
 
 
+@app.post("/agent/memories/confirm-pending")
+def agent_memories_confirm_pending_batch():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    ids_raw = payload.get("ids", [])
+    ids: list[str] = []
+    if isinstance(ids_raw, list):
+        for item in ids_raw:
+            value = str(item or "").strip()
+            if value and value not in ids:
+                ids.append(value)
+
+    try:
+        limit = max(1, min(100, int(payload.get("limit", 30))))
+    except (TypeError, ValueError):
+        limit = 30
+
+    query = {
+        "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+        "user_id": f"eq.{user_id}",
+        "order": "updated_at.desc,created_at.desc,id.desc",
+        "limit": str(limit),
+    }
+    if ids:
+        query["id"] = f"in.({','.join(ids)})"
+    else:
+        query["tags"] = f"cs.{{{_AGENT_TAG_PENDING}}}"
+
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query=query,
+    )
+    if status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    confirmed_ids: list[str] = []
+    skipped_conflicts: list[str] = []
+    failed_ids: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id", "")).strip()
+        if not row_id:
+            continue
+        row_tags = row.get("tags") if isinstance(row.get("tags"), list) else []
+        if _agent_is_memory_conflict(row_tags):
+            skipped_conflicts.append(row_id)
+            continue
+
+        keep_tags = _agent_clean_memory_tags(row_tags)
+        new_tags = _agent_build_memory_tags(keep_tags, pending=False)
+        final_kind = _normalize_agent_memory_kind(str(row.get("kind", "insight")))
+        final_content = str(row.get("content", ""))
+        final_source = str(row.get("source", "chat"))
+        importance = _agent_compute_memory_importance(
+            kind=final_kind,
+            content=final_content,
+            source=final_source,
+            pending=False,
+        )
+
+        patch_status, _ = _supabase_rest_request(
+            method="PATCH",
+            path="/rest/v1/agent_memories",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "id": f"eq.{row_id}",
+                "user_id": f"eq.{user_id}",
+            },
+            payload={
+                "tags": new_tags,
+                "importance": importance,
+                "updated_at": _utc_now_iso(),
+            },
+            prefer="return=minimal",
+        )
+        if patch_status in (200, 204):
+            confirmed_ids.append(row_id)
+        else:
+            failed_ids.append(row_id)
+
+    _agent_log_tool_execution(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        tool_name="memory_pending_bulk_confirm",
+        status="success" if not failed_ids else "error",
+        input_text=json.dumps({"requested": len(rows), "limit": limit}, ensure_ascii=False),
+        output_text=json.dumps({"confirmed": len(confirmed_ids), "skipped_conflicts": len(skipped_conflicts), "failed": len(failed_ids)}, ensure_ascii=False),
+        error_text="" if not failed_ids else f"failed_ids:{','.join(failed_ids[:8])}",
+        latency_ms=0,
+    )
+
+    return jsonify({
+        "ok": True,
+        "confirmed_ids": confirmed_ids,
+        "skipped_conflict_ids": skipped_conflicts,
+        "failed_ids": failed_ids,
+    })
+
+
+@app.get("/agent/memory-governance/history")
+def agent_memory_governance_history():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 40))))
+    except (TypeError, ValueError):
+        limit = 40
+
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_tool_logs",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,tool_name,status,input,output,error,created_at",
+            "user_id": f"eq.{user_id}",
+            "tool_name": "in.(memory_conflict_resolve,memory_pending_bulk_confirm)",
+            "order": "created_at.desc,id.desc",
+            "limit": str(limit),
+        },
+    )
+    if status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    return jsonify({"ok": True, "events": rows})
+
+
 @app.get("/agent/memories/<memory_id>/conflicts")
 def agent_memory_conflicts(memory_id: str):
     supabase_url, service_key, user_id = _resolve_authed_user()

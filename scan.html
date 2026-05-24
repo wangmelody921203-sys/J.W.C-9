@@ -1023,6 +1023,9 @@
       flex: 1;
       text-align: left;
     }
+    .pet-memory-btn-wide {
+      min-width: 58px;
+    }
     .pet-memory-panel {
       border-bottom: 1px solid rgba(255, 255, 255, 0.06);
       padding: 8px 10px;
@@ -1095,6 +1098,29 @@
       font-size: 12px;
       color: var(--muted);
       padding: 4px;
+    }
+    .pet-memory-history {
+      border-top: 1px dashed rgba(255, 255, 255, 0.12);
+      margin-top: 8px;
+      padding-top: 8px;
+    }
+    .pet-memory-history-title {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .pet-memory-history-list {
+      display: grid;
+      gap: 6px;
+    }
+    .pet-memory-history-item {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 6px;
+      font-size: 11px;
+      color: #c8d6e5;
+      background: rgba(255, 255, 255, 0.02);
+      line-height: 1.4;
     }
     .pet-memory-item.conflict {
       border-color: rgba(251, 191, 36, 0.42);
@@ -1405,6 +1431,8 @@
     </div>
     <div class="pet-memory-row">
       <button id="pet-memory-toggle" class="pet-memory-toggle" type="button" aria-label="展開記憶庫">記憶庫（可編輯）</button>
+      <button id="pet-memory-confirm-all" class="pet-memory-btn pet-memory-btn-wide" type="button" aria-label="批次確認待確認記憶">批次確認</button>
+      <button id="pet-memory-history-toggle" class="pet-memory-btn" type="button" aria-label="查看治理紀錄">歷史</button>
       <button id="pet-memory-add" class="pet-memory-btn" type="button" aria-label="新增記憶">＋記</button>
       <button id="pet-memory-refresh" class="pet-memory-btn" type="button" aria-label="刷新記憶">↻</button>
     </div>
@@ -1429,6 +1457,10 @@
         <input id="pet-memory-search" class="pet-memory-search" type="search" placeholder="搜尋記憶內容..." aria-label="搜尋記憶內容">
       </div>
       <div id="pet-memory-list" class="pet-memory-list"></div>
+      <div id="pet-memory-history" class="pet-memory-history" style="display:none">
+        <div class="pet-memory-history-title">治理紀錄（衝突處理 / 批次確認）</div>
+        <div id="pet-memory-history-list" class="pet-memory-history-list"></div>
+      </div>
     </div>
     <div id="pet-messages" class="pet-messages"></div>
     <div class="pet-input-row">
@@ -3122,6 +3154,8 @@
     const petSessionNewBtn = document.getElementById("pet-session-new");
     const petSessionDeleteBtn = document.getElementById("pet-session-delete");
     const petMemoryToggleBtn = document.getElementById("pet-memory-toggle");
+    const petMemoryConfirmAllBtn = document.getElementById("pet-memory-confirm-all");
+    const petMemoryHistoryToggleBtn = document.getElementById("pet-memory-history-toggle");
     const petMemoryAddBtn = document.getElementById("pet-memory-add");
     const petMemoryRefreshBtn = document.getElementById("pet-memory-refresh");
     const petMemoryPanel = document.getElementById("pet-memory-panel");
@@ -3129,6 +3163,8 @@
     const petMemoryStatusFilter = document.getElementById("pet-memory-status-filter");
     const petMemorySearch = document.getElementById("pet-memory-search");
     const petMemoryList = document.getElementById("pet-memory-list");
+    const petMemoryHistoryBox = document.getElementById("pet-memory-history");
+    const petMemoryHistoryList = document.getElementById("pet-memory-history-list");
     const petMessages = document.getElementById("pet-messages");
     const petInput    = document.getElementById("pet-input");
     const petSendBtn  = document.getElementById("pet-send");
@@ -3152,6 +3188,8 @@
     let petPanelExpanded = false;
     let petPanelCustomSize = null;
     let petMemorySearchTimer = null;
+    let petMemoryHistoryOpen = false;
+    let petMemoryGovernanceEvents = [];
     let petMemoryFilters = {
       kind: "all",
       status: "all",
@@ -3852,6 +3890,109 @@
       }
     }
 
+    function petRenderMemoryGovernanceHistory() {
+      if (!petMemoryHistoryList) {
+        return;
+      }
+      petMemoryHistoryList.innerHTML = "";
+      if (!petMemoryGovernanceEvents.length) {
+        const empty = document.createElement("div");
+        empty.className = "pet-memory-empty";
+        empty.textContent = "目前沒有治理紀錄。";
+        petMemoryHistoryList.appendChild(empty);
+        return;
+      }
+
+      petMemoryGovernanceEvents.forEach((row) => {
+        const item = document.createElement("div");
+        item.className = "pet-memory-history-item";
+        const tool = String(row?.tool_name || "event");
+        const status = String(row?.status || "success");
+        const ts = String(row?.created_at || "").replace("T", " ").replace("Z", "").slice(0, 19);
+        let summary = "";
+        try {
+          const outputRaw = String(row?.output || "").trim();
+          if (outputRaw.startsWith("{") || outputRaw.startsWith("[")) {
+            const parsed = JSON.parse(outputRaw);
+            if (parsed && typeof parsed === "object") {
+              if (tool === "memory_pending_bulk_confirm") {
+                summary = `已確認 ${Number(parsed.confirmed || 0)}，略過衝突 ${Number(parsed.skipped_conflicts || 0)}`;
+              } else if (tool === "memory_conflict_resolve") {
+                summary = String(parsed.action || "處理衝突");
+              }
+            }
+          }
+        } catch (_) {
+          // ignore parse errors
+        }
+        item.textContent = `${ts} ・${tool} ・${status}${summary ? ` ・${summary}` : ""}`;
+        petMemoryHistoryList.appendChild(item);
+      });
+    }
+
+    async function petLoadMemoryGovernanceHistory() {
+      if (!petHasCloudSession()) {
+        petMemoryGovernanceEvents = [];
+        petRenderMemoryGovernanceHistory();
+        return;
+      }
+      try {
+        const data = await petAgentApi("/agent/memory-governance/history?limit=20");
+        const rows = Array.isArray(data.events) ? data.events : [];
+        petMemoryGovernanceEvents = rows;
+      } catch (err) {
+        console.warn("[pet] load memory governance history failed:", err);
+      }
+      petRenderMemoryGovernanceHistory();
+    }
+
+    async function petLogMemoryGovernanceEvent(toolName, status, inputObj, outputObj, errorText = "") {
+      if (!petHasCloudSession()) {
+        return;
+      }
+      try {
+        await petAgentApi("/agent/tool-logs", {
+          method: "POST",
+          body: JSON.stringify({
+            tool_name: String(toolName || "memory_event").slice(0, 80),
+            status: status || "success",
+            input: JSON.stringify(inputObj || {}, null, 0),
+            output: JSON.stringify(outputObj || {}, null, 0),
+            error: String(errorText || "").slice(0, 500),
+            latency_ms: 0,
+          }),
+        });
+      } catch (err) {
+        console.warn("[pet] log governance event failed:", err);
+      }
+    }
+
+    async function petConfirmAllPendingMemories() {
+      if (!petHasCloudSession()) {
+        alert("請先登入，才能批次確認記憶。");
+        return;
+      }
+      if (!window.confirm("要批次確認待確認記憶嗎？（有衝突的記憶會被略過）")) {
+        return;
+      }
+      try {
+        const data = await petAgentApi("/agent/memories/confirm-pending", {
+          method: "POST",
+          body: JSON.stringify({ limit: 30 }),
+        });
+        const confirmed = Array.isArray(data.confirmed_ids) ? data.confirmed_ids.length : 0;
+        const skipped = Array.isArray(data.skipped_conflict_ids) ? data.skipped_conflict_ids.length : 0;
+        const failed = Array.isArray(data.failed_ids) ? data.failed_ids.length : 0;
+        await petLoadMemories(true);
+        if (petMemoryHistoryOpen) {
+          await petLoadMemoryGovernanceHistory();
+        }
+        alert(`批次確認完成：已確認 ${confirmed} 筆，略過衝突 ${skipped} 筆，失敗 ${failed} 筆。`);
+      } catch (err) {
+        alert("批次確認失敗，請稍後再試。");
+      }
+    }
+
     async function petCreateMemoryByUser() {
       if (!petHasCloudSession()) {
         alert("請先登入，才能建立可同步的記憶。");
@@ -3997,6 +4138,12 @@
               confirm_pending: true,
             }),
           });
+          if (picked && picked.id) {
+            await petAgentApi(`/agent/memories/${encodeURIComponent(String(picked.id))}`, {
+              method: "DELETE",
+            });
+          }
+          await petLogMemoryGovernanceEvent("memory_conflict_resolve", "success", { memory_id: memoryId }, { action: "keep_new" });
         } else if (action.trim() === "2") {
           if (!window.confirm("將刪除新版記憶並保留舊版，確定嗎？")) {
             return;
@@ -4004,6 +4151,7 @@
           await petAgentApi(`/agent/memories/${encodeURIComponent(memoryId)}`, {
             method: "DELETE",
           });
+          await petLogMemoryGovernanceEvent("memory_conflict_resolve", "success", { memory_id: memoryId }, { action: "keep_old" });
         } else if (action.trim() === "3") {
           const merged = window.prompt("請輸入合併後內容（至少 8 字）", `${String(picked.content || "")}；${String(target.content || "")}`);
           if (merged === null) {
@@ -4026,12 +4174,17 @@
               method: "DELETE",
             });
           }
+          await petLogMemoryGovernanceEvent("memory_conflict_resolve", "success", { memory_id: memoryId }, { action: "merge" });
         } else {
           alert("未執行：請輸入 1、2 或 3。");
           return;
         }
         await petLoadMemories(true);
+        if (petMemoryHistoryOpen) {
+          await petLoadMemoryGovernanceHistory();
+        }
       } catch (err) {
+        await petLogMemoryGovernanceEvent("memory_conflict_resolve", "error", { memory_id: memoryId }, { action: "unknown" }, String(err && err.message ? err.message : err));
         alert("處理衝突失敗，請稍後再試。");
       }
     }
@@ -4263,6 +4416,7 @@
       petHistory = [];
       petAgentMemories = [];
       petMemoriesLoadedUserKey = "";
+      petMemoryGovernanceEvents = [];
       petLocalSessionHistories = {};
       petLocalLoadedStorageKey = "";
       if (!petHasCloudSession()) {
@@ -4530,6 +4684,24 @@
       petMemoryToggleBtn.textContent = petMemoryPanelOpen ? "收起記憶庫" : "記憶庫（可編輯）";
       if (petMemoryPanelOpen) {
         await petLoadMemories(false);
+        if (petMemoryHistoryOpen) {
+          await petLoadMemoryGovernanceHistory();
+        }
+      }
+    });
+
+    petMemoryConfirmAllBtn.addEventListener("click", async () => {
+      await petConfirmAllPendingMemories();
+    });
+
+    petMemoryHistoryToggleBtn.addEventListener("click", async () => {
+      petMemoryHistoryOpen = !petMemoryHistoryOpen;
+      if (petMemoryHistoryBox) {
+        petMemoryHistoryBox.style.display = petMemoryHistoryOpen ? "block" : "none";
+      }
+      petMemoryHistoryToggleBtn.textContent = petMemoryHistoryOpen ? "隱藏歷史" : "歷史";
+      if (petMemoryHistoryOpen) {
+        await petLoadMemoryGovernanceHistory();
       }
     });
 
