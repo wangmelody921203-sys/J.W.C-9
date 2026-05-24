@@ -2931,6 +2931,10 @@
     let petLocalLoadedStorageKey = "";
     let petCloudHealthy = true;
     let petWaiting = false;
+    let petLastSafetyMode = "normal";
+    let petLastCrisisLevel = "";
+    let petLastCrisisNoticeAt = 0;
+    const PET_CRISIS_NOTICE_COOLDOWN_MS = 2 * 60 * 1000;
 
     function petSetDnd(on) {
       petTrigger.classList.toggle("dnd", on);
@@ -3486,6 +3490,21 @@
       return "安全保護模式已啟用：我會先陪你穩住，再給最小可執行的安全步驟。";
     }
 
+    function petShouldShowCrisisNotice(level) {
+      const now = Date.now();
+      const normalizedLevel = String(level || "medium").toLowerCase() || "medium";
+      const isSameLevel = petLastCrisisLevel === normalizedLevel;
+      const inCooldown = (now - petLastCrisisNoticeAt) < PET_CRISIS_NOTICE_COOLDOWN_MS;
+
+      if (isSameLevel && inCooldown) {
+        return false;
+      }
+
+      petLastCrisisLevel = normalizedLevel;
+      petLastCrisisNoticeAt = now;
+      return true;
+    }
+
     function petBuildFallback(emotion) {
       const byEmotion = {
         sadness: "聽起來你現在真的很難受，謝謝你願意告訴我。",
@@ -3560,11 +3579,15 @@
 
       loadingBubble.remove();
       if (isCrisisMode) {
-        petAppend("pet", petBuildCrisisModeNotice(crisisLevel), "crisis-note");
+        const showNotice = petLastSafetyMode !== "crisis" || petShouldShowCrisisNotice(crisisLevel);
+        if (showNotice) {
+          petAppend("pet", petBuildCrisisModeNotice(crisisLevel), "crisis-note");
+        }
         petAppend("pet", reply, "crisis-reply");
       } else {
         petAppend("pet", reply);
       }
+      petLastSafetyMode = isCrisisMode ? "crisis" : "normal";
       petHistory.push({ role: "assistant", content: reply });
       if (petHistory.length > 300) {
         petHistory.splice(0, petHistory.length - 300);

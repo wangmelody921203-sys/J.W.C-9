@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from collections import defaultdict
 from pathlib import Path
 
@@ -194,19 +195,77 @@ def _detect_crisis_signal(raw: str) -> dict:
     return {"is_crisis": False, "level": "none", "matched": []}
 
 
-def _build_crisis_reply(level: str = "medium", emotion: str = "unknown", persona: str = "courage_coach") -> str:
+def _pick_crisis_lead(emotion: str, seed_text: str = "", previous_assistant: str = "") -> str:
     by_emotion = {
-        "sadness": "你現在這麼痛，還願意說出來，真的很不容易。",
-        "anger": "你現在又氣又受傷的感覺，我有接住，先不用壓抑它。",
-        "fear": "你現在的慌和不安很真實，我們先把你穩住。",
-        "disgust": "那種反感和耗盡的感覺很折磨，你辛苦了。",
-        "contempt": "你心裡的失望與疏離感，我有聽見。",
-        "uncertain": "現在腦中很亂、說不清楚也沒關係，我在這裡。",
-        "neutral": "謝謝你願意繼續說，我會先陪你把這一刻撐過去。",
-        "no_face": "我先不猜你的狀態，先把你的安全放第一位，我陪你。",
-        "unknown": "謝謝你願意說出來，我有在聽，先一起把這一刻撐過去。",
+        "sadness": (
+            "你現在這麼痛，還願意說出來，真的很不容易。",
+            "我聽見你心裡很沉重，能說出來已經很有力量。",
+            "這份難受很真實，你不需要一個人硬撐。",
+        ),
+        "anger": (
+            "你現在又氣又受傷的感覺，我有接住，先不用壓抑它。",
+            "你這股怒氣背後的委屈，我有聽見。",
+            "你現在很炸很累是可以理解的，我先陪你穩下來。",
+        ),
+        "fear": (
+            "你現在的慌和不安很真實，我們先把你穩住。",
+            "你現在會害怕是正常的，我們先把呼吸慢下來。",
+            "我知道你現在很不安，先不用逼自己想清楚全部。",
+        ),
+        "disgust": (
+            "那種反感和耗盡的感覺很折磨，你辛苦了。",
+            "你現在這種排斥與疲憊，我有接到。",
+            "這種卡住又反胃的感受很消耗，我在這裡陪你。",
+        ),
+        "contempt": (
+            "你心裡的失望與疏離感，我有聽見。",
+            "你現在那種冷掉與失望的心情，很可以理解。",
+            "這份疏離感很重，我先陪你把當下穩住。",
+        ),
+        "uncertain": (
+            "現在腦中很亂、說不清楚也沒關係，我在這裡。",
+            "先不用急著講完整，你現在這樣已經很好了。",
+            "混亂和卡住都沒關係，我們先顧你的安全。",
+        ),
+        "neutral": (
+            "謝謝你願意繼續說，我會先陪你把這一刻撐過去。",
+            "我有在聽，你現在不用獨自承擔。",
+            "先不用急，我們先把你穩住，再看下一步。",
+        ),
+        "no_face": (
+            "我先不猜你的狀態，先把你的安全放第一位，我陪你。",
+            "先不需要判斷情緒類型，我們先讓你安全下來。",
+            "我在這裡，先把你這一刻好好接住。",
+        ),
+        "unknown": (
+            "謝謝你願意說出來，我有在聽，先一起把這一刻撐過去。",
+            "你願意開口很重要，我會先陪你穩住。",
+            "你不需要一個人扛，我們先從安全開始。",
+        ),
     }
-    lead = by_emotion.get(str(emotion or "").strip().lower(), by_emotion["unknown"])
+    normalized_emotion = str(emotion or "").strip().lower()
+    pool = by_emotion.get(normalized_emotion, by_emotion["unknown"])
+    if not pool:
+        return "謝謝你願意說出來，我有在聽。"
+
+    seed = str(seed_text or "").strip().lower()
+    index = zlib.crc32(seed.encode("utf-8")) % len(pool) if seed else 0
+    lead = pool[index]
+
+    previous = str(previous_assistant or "").strip()
+    if previous and lead in previous and len(pool) > 1:
+        lead = pool[(index + 1) % len(pool)]
+    return lead
+
+
+def _build_crisis_reply(
+    level: str = "medium",
+    emotion: str = "unknown",
+    persona: str = "courage_coach",
+    seed_text: str = "",
+    previous_assistant: str = "",
+) -> str:
+    lead = _pick_crisis_lead(emotion=emotion, seed_text=seed_text, previous_assistant=previous_assistant)
 
     if level == "high":
         action = (
@@ -2964,12 +3023,20 @@ def generate():
             last_user_text = str(m.get("content", "")).strip()
             break
 
+    last_assistant_text = ""
+    for m in reversed(clean_messages):
+        if m.get("role") == "assistant":
+            last_assistant_text = str(m.get("content", "")).strip()
+            break
+
     crisis_info = _detect_crisis_signal(last_user_text)
     if crisis_info.get("is_crisis"):
         safe_reply = _build_crisis_reply(
             level=str(crisis_info.get("level", "medium")),
             emotion=emotion,
             persona=persona,
+            seed_text=last_user_text,
+            previous_assistant=last_assistant_text,
         )
         if user_id and supabase_url and service_key:
             _agent_log_tool_execution(
