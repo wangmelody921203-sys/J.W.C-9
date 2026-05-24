@@ -1019,6 +1019,11 @@
       border: 1px solid rgba(255, 202, 146, 0.35);
       color: #fff4e8;
     }
+    .pet-bubble.crisis-transition {
+      background: rgba(135, 206, 250, 0.12);
+      border: 1px solid rgba(135, 206, 250, 0.35);
+      color: #e1f3ff;
+    }
 
     .pet-input-row {
       display: flex;
@@ -2933,6 +2938,7 @@
     let petWaiting = false;
     let petLastSafetyMode = "normal";
     let petLastCrisisLevel = "";
+    let petLastCrisisPhase = "";
     let petLastCrisisNoticeAt = 0;
     const PET_CRISIS_NOTICE_COOLDOWN_MS = 2 * 60 * 1000;
 
@@ -3494,6 +3500,18 @@
       return "安全保護模式已啟用：我會先陪你穩住，再給最小可執行的安全步驟。";
     }
 
+    function petBuildCrisisPhaseTransition(previousPhase, nextPhase) {
+      const from = String(previousPhase || "").toLowerCase();
+      const to = String(nextPhase || "").toLowerCase();
+      if (from === "stabilize" && to === "guide") {
+        return "你剛剛已經努力把自己穩住了，我們現在可以一起走下一個小步驟。";
+      }
+      if (from === "guide" && to === "stabilize") {
+        return "我們先回到穩定節奏，先把你當下的安全和呼吸顧好就好。";
+      }
+      return "";
+    }
+
     function petShouldShowCrisisNotice(level) {
       const now = Date.now();
       const normalizedLevel = String(level || "medium").toLowerCase() || "medium";
@@ -3585,6 +3603,15 @@
 
       loadingBubble.remove();
       if (isCrisisMode) {
+        const phaseChanged = petLastSafetyMode === "crisis"
+          && !!petLastCrisisPhase
+          && petLastCrisisPhase !== crisisPhase;
+        if (phaseChanged) {
+          const transitionText = petBuildCrisisPhaseTransition(petLastCrisisPhase, crisisPhase);
+          if (transitionText) {
+            petAppend("pet", transitionText, "crisis-note crisis-transition");
+          }
+        }
         const showNotice = petLastSafetyMode !== "crisis" || petShouldShowCrisisNotice(crisisLevel);
         if (showNotice) {
           petAppend("pet", petBuildCrisisModeNotice(crisisLevel, crisisPhase), "crisis-note");
@@ -3594,6 +3621,7 @@
         petAppend("pet", reply);
       }
       petLastSafetyMode = isCrisisMode ? "crisis" : "normal";
+      petLastCrisisPhase = isCrisisMode ? crisisPhase : "";
       petHistory.push({ role: "assistant", content: reply });
       if (petHistory.length > 300) {
         petHistory.splice(0, petHistory.length - 300);
