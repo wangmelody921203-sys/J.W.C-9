@@ -1034,6 +1034,31 @@
     .pet-memory-panel.open {
       display: block;
     }
+    .pet-memory-filters {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .pet-memory-filter-row {
+      display: flex;
+      gap: 6px;
+    }
+    .pet-memory-filter,
+    .pet-memory-search {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text);
+      min-height: 28px;
+      font-size: 12px;
+      padding: 4px 8px;
+      outline: none;
+    }
+    .pet-memory-filter option {
+      color: #0f172a;
+      background: #f8fafc;
+    }
     .pet-memory-item {
       border: 1px solid rgba(255, 255, 255, 0.1);
       background: rgba(255, 255, 255, 0.03);
@@ -1158,22 +1183,23 @@
     .pet-send:disabled { opacity: 0.4; cursor: default; }
 
     .pet-resize-handle {
-      position: absolute;
-      right: 6px;
-      bottom: 6px;
-      width: 16px;
-      height: 16px;
-      border: none;
-      border-radius: 4px;
-      background:
-        linear-gradient(135deg, transparent 48%, rgba(255, 255, 255, 0.44) 49%, rgba(255, 255, 255, 0.44) 52%, transparent 53%),
-        linear-gradient(135deg, transparent 64%, rgba(255, 255, 255, 0.3) 65%, rgba(255, 255, 255, 0.3) 68%, transparent 69%);
-      cursor: nwse-resize;
-      opacity: 0.75;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--muted);
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1;
+      cursor: nesw-resize;
+      opacity: 0.9;
+      padding: 0;
     }
 
     .pet-resize-handle:hover {
       opacity: 1;
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.32);
     }
 
     @media (max-width: 640px) {
@@ -1363,6 +1389,7 @@
         <div class="pet-subtitle">勇氣同理教練模式・非心理諮商</div>
       </div>
       <div class="pet-header-actions">
+        <button id="pet-resize-handle" class="pet-resize-handle" type="button" aria-label="拖拉調整聊天視窗大小" title="拖拉調整聊天視窗大小">⤡</button>
         <button id="pet-resize" class="pet-resize" type="button" aria-label="放大對話視窗">放大</button>
         <button id="pet-close" class="pet-close" aria-label="關閉">✕</button>
       </div>
@@ -1378,6 +1405,25 @@
       <button id="pet-memory-refresh" class="pet-memory-btn" type="button" aria-label="刷新記憶">↻</button>
     </div>
     <div id="pet-memory-panel" class="pet-memory-panel" aria-label="Agent 記憶庫">
+      <div class="pet-memory-filters">
+        <div class="pet-memory-filter-row">
+          <select id="pet-memory-kind-filter" class="pet-memory-filter" aria-label="記憶分類篩選">
+            <option value="all">全部分類</option>
+            <option value="profile">人物背景</option>
+            <option value="preference">偏好</option>
+            <option value="constraint">限制</option>
+            <option value="goal">目標</option>
+            <option value="event">事件</option>
+            <option value="insight">洞察</option>
+          </select>
+          <select id="pet-memory-status-filter" class="pet-memory-filter" aria-label="記憶狀態篩選">
+            <option value="all">全部狀態</option>
+            <option value="pending">待確認</option>
+            <option value="confirmed">已確認</option>
+          </select>
+        </div>
+        <input id="pet-memory-search" class="pet-memory-search" type="search" placeholder="搜尋記憶內容..." aria-label="搜尋記憶內容">
+      </div>
       <div id="pet-memory-list" class="pet-memory-list"></div>
     </div>
     <div id="pet-messages" class="pet-messages"></div>
@@ -1386,7 +1432,6 @@
         placeholder="說點什麼…（Enter 送出）" maxlength="500"></textarea>
       <button id="pet-send" class="pet-send" aria-label="送出">↑</button>
     </div>
-    <button id="pet-resize-handle" class="pet-resize-handle" type="button" aria-label="拖拉調整聊天視窗大小" title="拖拉調整聊天視窗大小"></button>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -3076,6 +3121,9 @@
     const petMemoryAddBtn = document.getElementById("pet-memory-add");
     const petMemoryRefreshBtn = document.getElementById("pet-memory-refresh");
     const petMemoryPanel = document.getElementById("pet-memory-panel");
+    const petMemoryKindFilter = document.getElementById("pet-memory-kind-filter");
+    const petMemoryStatusFilter = document.getElementById("pet-memory-status-filter");
+    const petMemorySearch = document.getElementById("pet-memory-search");
     const petMemoryList = document.getElementById("pet-memory-list");
     const petMessages = document.getElementById("pet-messages");
     const petInput    = document.getElementById("pet-input");
@@ -3099,6 +3147,12 @@
     let petWaiting = false;
     let petPanelExpanded = false;
     let petPanelCustomSize = null;
+    let petMemorySearchTimer = null;
+    let petMemoryFilters = {
+      kind: "all",
+      status: "all",
+      q: "",
+    };
 
     const PET_PANEL_EXPANDED_KEY = "pet-panel-expanded-v1";
     const PET_PANEL_SIZE_KEY = "pet-panel-size-v1";
@@ -3220,7 +3274,7 @@
         const dy = event.clientY - startY;
         const limit = petGetPanelSizeLimit();
         const width = Math.max(limit.minWidth, Math.min(limit.maxWidth, startWidth + dx));
-        const height = Math.max(limit.minHeight, Math.min(limit.maxHeight, startHeight + dy));
+        const height = Math.max(limit.minHeight, Math.min(limit.maxHeight, startHeight - dy));
         petPanelCustomSize = { width, height };
         petApplyCustomSize();
       };
@@ -3643,7 +3697,11 @@
       if (!petAgentMemories.length) {
         const empty = document.createElement("div");
         empty.className = "pet-memory-empty";
-        empty.textContent = "目前沒有記憶。建議存具體、可行動、可驗證的內容。";
+        if (petMemoryFilters.kind !== "all" || petMemoryFilters.status !== "all" || petMemoryFilters.q) {
+          empty.textContent = "目前篩選條件下沒有記憶，請調整分類/狀態/關鍵字。";
+        } else {
+          empty.textContent = "目前沒有記憶。建議存具體、可行動、可驗證的內容。";
+        }
         petMemoryList.appendChild(empty);
         return;
       }
@@ -3717,7 +3775,19 @@
         return;
       }
       try {
-        const data = await petAgentApi("/agent/memories?limit=30&offset=0");
+        const params = new URLSearchParams();
+        params.set("limit", "60");
+        params.set("offset", "0");
+        if (petMemoryFilters.kind && petMemoryFilters.kind !== "all") {
+          params.set("kind", petMemoryFilters.kind);
+        }
+        if (petMemoryFilters.status && petMemoryFilters.status !== "all") {
+          params.set("status", petMemoryFilters.status);
+        }
+        if (petMemoryFilters.q) {
+          params.set("q", petMemoryFilters.q);
+        }
+        const data = await petAgentApi(`/agent/memories?${params.toString()}`);
         const rows = Array.isArray(data.memories) ? data.memories : [];
         petAgentMemories = rows
           .filter((row) => row && row.id && row.content)
@@ -3735,6 +3805,32 @@
         console.warn("[pet] load memories failed:", err);
       }
       petRenderMemoryList();
+    }
+
+    function petBindMemoryFilters() {
+      if (petMemoryKindFilter) {
+        petMemoryKindFilter.addEventListener("change", async () => {
+          petMemoryFilters.kind = String(petMemoryKindFilter.value || "all");
+          await petLoadMemories(true);
+        });
+      }
+      if (petMemoryStatusFilter) {
+        petMemoryStatusFilter.addEventListener("change", async () => {
+          petMemoryFilters.status = String(petMemoryStatusFilter.value || "all");
+          await petLoadMemories(true);
+        });
+      }
+      if (petMemorySearch) {
+        petMemorySearch.addEventListener("input", () => {
+          petMemoryFilters.q = String(petMemorySearch.value || "").trim();
+          if (petMemorySearchTimer) {
+            clearTimeout(petMemorySearchTimer);
+          }
+          petMemorySearchTimer = setTimeout(() => {
+            void petLoadMemories(true);
+          }, 260);
+        });
+      }
     }
 
     async function petCreateMemoryByUser() {
@@ -4329,6 +4425,7 @@
     petLoadPanelExpandedState();
     petLoadPanelCustomSize();
     petInitPanelResizeHandle();
+    petBindMemoryFilters();
     // 利用 finalizeScan 完成後更新情緒上下文
     const _origFinalizeScan = finalizeScan;
     // 覆寫 finalizeScan 以注入桌寵情緒更新

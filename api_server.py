@@ -1538,6 +1538,7 @@ def agent_memories_list():
         offset = 0
 
     kind_raw = str(request.args.get("kind", "")).strip().lower()
+    status_raw = str(request.args.get("status", "")).strip().lower()
     query = {
         "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
         "user_id": f"eq.{user_id}",
@@ -1547,6 +1548,9 @@ def agent_memories_list():
     }
     if kind_raw:
         query["kind"] = f"eq.{_normalize_agent_memory_kind(kind_raw)}"
+    if status_raw in {"pending", "confirmed"}:
+        tag = _AGENT_TAG_PENDING if status_raw == "pending" else _AGENT_TAG_CONFIRMED
+        query["tags"] = f"cs.{{{tag}}}"
 
     q = str(request.args.get("q", "")).strip()
     if q:
