@@ -3406,14 +3406,19 @@
       await petSupabaseSaveMessage(role, content);
     }
 
-    async function petDeleteCurrentCloudSession() {
-      if (!petCanUseCloud() || !petCurrentSessionId) {
+    async function petDeleteCurrentCloudSession(sessionId = petCurrentSessionId, skipConfirm = false) {
+      const targetId = String(sessionId || "").trim();
+      if (!petCanUseCloud() || !targetId) {
         return;
       }
-      if (!window.confirm("確定要刪除這個聊天室嗎？刪除後無法復原。")) {
+      // local-* 是前端暫存聊天室 ID，不能拿來刪雲端 UUID session。
+      if (targetId.startsWith("local-")) {
         return;
       }
-      await petSupabaseDeleteSession(petCurrentSessionId);
+      if (!skipConfirm && !window.confirm("確定要刪除這個聊天室嗎？刪除後無法復原。")) {
+        return;
+      }
+      await petSupabaseDeleteSession(targetId);
       await petLoadCloudSessions(true);
     }
 
@@ -3629,12 +3634,14 @@
       if (!window.confirm("確定要刪除這個聊天室嗎？")) {
         return;
       }
+      // 本機刪除會改變 petCurrentSessionId，先保留原始目標 ID。
+      const targetId = String(petCurrentSessionId || "").trim();
       // 先刪除本地會話（立即可用）
       petDeleteCurrentLocalSession();
       // 若登入且雲端可用，嘗試同步刪除（背景進行，不阻擋 UI）
-      if (petCanUseCloud()) {
+      if (petCanUseCloud() && targetId && !targetId.startsWith("local-")) {
         try {
-          await petDeleteCurrentCloudSession();
+          await petDeleteCurrentCloudSession(targetId, true);
         } catch (err) {
           console.warn("[pet] cloud session deletion failed, but local deleted:", err);
           // 雲端失敗，本地已刪除
