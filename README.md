@@ -146,14 +146,82 @@ create table if not exists public.chat_messages (
 
 create index if not exists chat_messages_session_created_idx
 	on public.chat_messages (user_id, session_id, created_at asc, id asc);
+
+-- Agent 長期記憶
+create table if not exists public.agent_memories (
+	id uuid primary key default gen_random_uuid(),
+	user_id uuid not null,
+	kind text not null default 'insight',
+	content text not null,
+	importance int not null default 50,
+	tags jsonb not null default '[]'::jsonb,
+	source text not null default 'chat',
+	session_id uuid,
+	created_at timestamptz not null default now(),
+	updated_at timestamptz not null default now()
+);
+
+create index if not exists agent_memories_user_updated_idx
+	on public.agent_memories (user_id, updated_at desc, created_at desc);
+
+-- Agent 任務追蹤
+create table if not exists public.agent_tasks (
+	id uuid primary key default gen_random_uuid(),
+	user_id uuid not null,
+	title text not null,
+	details text not null default '',
+	status text not null default 'open',
+	priority text not null default 'normal',
+	due_at timestamptz,
+	done_at timestamptz,
+	source text not null default 'agent',
+	created_at timestamptz not null default now(),
+	updated_at timestamptz not null default now(),
+	constraint agent_tasks_status_check check (status in ('open', 'in_progress', 'done', 'cancelled')),
+	constraint agent_tasks_priority_check check (priority in ('low', 'normal', 'high'))
+);
+
+create index if not exists agent_tasks_user_updated_idx
+	on public.agent_tasks (user_id, updated_at desc, created_at desc);
+
+-- Agent 工具呼叫紀錄
+create table if not exists public.agent_tool_logs (
+	id uuid primary key default gen_random_uuid(),
+	user_id uuid not null,
+	tool_name text not null,
+	status text not null default 'success',
+	input text not null default '',
+	output text not null default '',
+	error text not null default '',
+	latency_ms int not null default 0,
+	created_at timestamptz not null default now(),
+	constraint agent_tool_logs_status_check check (status in ('success', 'error', 'skipped'))
+);
+
+create index if not exists agent_tool_logs_user_created_idx
+	on public.agent_tool_logs (user_id, created_at desc, id desc);
 ```
 
 #### 容量限制（可透過環境變數調整）
 
 - `CHAT_MAX_SESSIONS_PER_USER`：每位使用者最多保留聊天室數量（預設 60）
 - `CHAT_MAX_MESSAGES_PER_SESSION`：每個聊天室最多保留訊息數量（預設 300）
+- `AGENT_MAX_MEMORIES_PER_USER`：每位使用者最多保留長期記憶數量（預設 300）
+- `AGENT_MAX_TOOL_LOGS_PER_USER`：每位使用者最多保留工具紀錄數量（預設 1000）
 
 超出上限時，後端會自動清理最舊資料。
+
+### Agent Step 1 + Step 2 API（已實作）
+
+- `GET /agent/spec`：取得 Agent 的任務範圍與邊界定義
+- `GET /agent/memories`：查詢長期記憶
+- `POST /agent/memories`：新增長期記憶
+- `DELETE /agent/memories/<id>`：刪除長期記憶
+- `GET /agent/tasks`：查詢任務
+- `POST /agent/tasks`：建立任務
+- `PATCH /agent/tasks/<id>`：更新任務狀態/優先級/內容
+- `POST /agent/tool-logs`：記錄工具呼叫
+- `GET /agent/tool-logs`：讀取工具呼叫紀錄
 
 ### 啟用方式
 

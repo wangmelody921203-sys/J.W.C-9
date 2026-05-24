@@ -224,6 +224,41 @@ DEFAULT_CLOUD_DIARY_MAX_ENTRIES_PER_USER = 500
 DEFAULT_CHAT_MAX_SESSIONS_PER_USER = 60
 DEFAULT_CHAT_MAX_MESSAGES_PER_SESSION = 300
 CHAT_MESSAGE_LENGTH_LIMIT = 1000
+DEFAULT_AGENT_MAX_MEMORIES_PER_USER = 300
+DEFAULT_AGENT_MAX_TOOL_LOGS_PER_USER = 1000
+AGENT_MEMORY_CONTENT_LIMIT = 1000
+AGENT_TASK_TITLE_LIMIT = 120
+AGENT_TASK_DETAILS_LIMIT = 1500
+AGENT_TOOL_LOG_TEXT_LIMIT = 3000
+_ALLOWED_AGENT_MEMORY_KINDS = {
+    "profile",
+    "preference",
+    "constraint",
+    "goal",
+    "event",
+    "insight",
+}
+_ALLOWED_AGENT_TASK_STATUS = {"open", "in_progress", "done", "cancelled"}
+_ALLOWED_AGENT_TASK_PRIORITY = {"low", "normal", "high"}
+
+_AGENT_SPEC = {
+    "name": "陰晴 Agent",
+    "in_scope": [
+        "情緒陪伴與同理回應",
+        "把目標拆成小步驟並追蹤",
+        "根據近期情緒紀錄做回顧建議",
+    ],
+    "out_of_scope": [
+        "醫療診斷與治療建議",
+        "法律與財務專業結論",
+        "高風險危機介入的單獨處置",
+    ],
+    "success_criteria": [
+        "跨 session 可回憶重要背景",
+        "可追蹤任務狀態與到期日",
+        "每次工具呼叫都有可追溯紀錄",
+    ],
+}
 
 
 def _get_cloud_diary_max_entries_per_user() -> int:
@@ -253,6 +288,24 @@ def _get_chat_max_messages_per_session() -> int:
     return max(50, value)
 
 
+def _get_agent_max_memories_per_user() -> int:
+    raw = os.environ.get("AGENT_MAX_MEMORIES_PER_USER", str(DEFAULT_AGENT_MAX_MEMORIES_PER_USER)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_AGENT_MAX_MEMORIES_PER_USER
+    return max(50, value)
+
+
+def _get_agent_max_tool_logs_per_user() -> int:
+    raw = os.environ.get("AGENT_MAX_TOOL_LOGS_PER_USER", str(DEFAULT_AGENT_MAX_TOOL_LOGS_PER_USER)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_AGENT_MAX_TOOL_LOGS_PER_USER
+    return max(100, value)
+
+
 def _utc_now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -262,6 +315,21 @@ def _normalize_chat_title(raw: str) -> str:
     if not title:
         return "新的對話"
     return title[:80]
+
+
+def _normalize_agent_memory_kind(raw: str) -> str:
+    kind = str(raw or "").strip().lower()
+    return kind if kind in _ALLOWED_AGENT_MEMORY_KINDS else "insight"
+
+
+def _normalize_agent_task_status(raw: str) -> str:
+    status = str(raw or "").strip().lower()
+    return status if status in _ALLOWED_AGENT_TASK_STATUS else "open"
+
+
+def _normalize_agent_task_priority(raw: str) -> str:
+    priority = str(raw or "").strip().lower()
+    return priority if priority in _ALLOWED_AGENT_TASK_PRIORITY else "normal"
 
 
 def _resolve_authed_user() -> tuple[str | None, str | None, str | None]:
@@ -451,6 +519,116 @@ def _prune_chat_messages(
         )
         if del_status not in (200, 204):
             return removed_total, "supabase_chat_message_prune_delete_failed"
+
+        removed_total += len(ids)
+
+
+def _prune_agent_memories(
+    *,
+    supabase_url: str,
+    service_key: str,
+    user_id: str,
+    keep_limit: int,
+) -> tuple[int, str | None]:
+    if keep_limit <= 0:
+        return 0, None
+
+    removed_total = 0
+    while True:
+        status, data = _supabase_rest_request(
+            method="GET",
+            path="/rest/v1/agent_memories",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "select": "id",
+                "user_id": f"eq.{user_id}",
+                "order": "updated_at.desc,created_at.desc,id.desc",
+                "offset": str(keep_limit),
+                "limit": "200",
+            },
+        )
+        if status != 200:
+            return removed_total, "supabase_agent_memory_prune_query_failed"
+
+        rows = data if isinstance(data, list) else []
+        if not rows:
+            return removed_total, None
+
+        ids = [str(row.get("id", "")).strip() for row in rows]
+        ids = [value for value in ids if value]
+        if not ids:
+            return removed_total, None
+
+        id_filter = f"in.({','.join(ids)})"
+        del_status, _ = _supabase_rest_request(
+            method="DELETE",
+            path="/rest/v1/agent_memories",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "user_id": f"eq.{user_id}",
+                "id": id_filter,
+            },
+            prefer="return=minimal",
+        )
+        if del_status not in (200, 204):
+            return removed_total, "supabase_agent_memory_prune_delete_failed"
+
+        removed_total += len(ids)
+
+
+def _prune_agent_tool_logs(
+    *,
+    supabase_url: str,
+    service_key: str,
+    user_id: str,
+    keep_limit: int,
+) -> tuple[int, str | None]:
+    if keep_limit <= 0:
+        return 0, None
+
+    removed_total = 0
+    while True:
+        status, data = _supabase_rest_request(
+            method="GET",
+            path="/rest/v1/agent_tool_logs",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "select": "id",
+                "user_id": f"eq.{user_id}",
+                "order": "created_at.desc,id.desc",
+                "offset": str(keep_limit),
+                "limit": "200",
+            },
+        )
+        if status != 200:
+            return removed_total, "supabase_agent_tool_log_prune_query_failed"
+
+        rows = data if isinstance(data, list) else []
+        if not rows:
+            return removed_total, None
+
+        ids = [str(row.get("id", "")).strip() for row in rows]
+        ids = [value for value in ids if value]
+        if not ids:
+            return removed_total, None
+
+        id_filter = f"in.({','.join(ids)})"
+        del_status, _ = _supabase_rest_request(
+            method="DELETE",
+            path="/rest/v1/agent_tool_logs",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "user_id": f"eq.{user_id}",
+                "id": id_filter,
+            },
+            prefer="return=minimal",
+        )
+        if del_status not in (200, 204):
+            return removed_total, "supabase_agent_tool_log_prune_delete_failed"
 
         removed_total += len(ids)
 
@@ -1208,6 +1386,454 @@ def chat_messages_append():
     rows = data if isinstance(data, list) else []
     message = rows[0] if rows else None
     return jsonify({"ok": True, "message": message}), 201
+
+
+@app.get("/agent/spec")
+def agent_spec_get():
+    return jsonify({"ok": True, "spec": _AGENT_SPEC})
+
+
+@app.get("/agent/memories")
+def agent_memories_list():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+
+    kind_raw = str(request.args.get("kind", "")).strip().lower()
+    query = {
+        "select": "id,kind,content,importance,tags,source,session_id,created_at,updated_at",
+        "user_id": f"eq.{user_id}",
+        "order": "updated_at.desc,created_at.desc,id.desc",
+        "limit": str(limit),
+        "offset": str(offset),
+    }
+    if kind_raw:
+        query["kind"] = f"eq.{_normalize_agent_memory_kind(kind_raw)}"
+
+    q = str(request.args.get("q", "")).strip()
+    if q:
+        safe = q.replace("*", "").replace("%", "")
+        if safe:
+            query["content"] = f"ilike.*{safe}*"
+
+    status, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query=query,
+    )
+    if status != 200:
+        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    return jsonify({"ok": True, "memories": rows})
+
+
+@app.post("/agent/memories")
+def agent_memories_create():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    kind = _normalize_agent_memory_kind(payload.get("kind", "insight"))
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        return jsonify({"error": "empty_content"}), 400
+    if len(content) > AGENT_MEMORY_CONTENT_LIMIT:
+        return jsonify({"error": "content_too_long", "limit": AGENT_MEMORY_CONTENT_LIMIT}), 400
+
+    importance_raw = payload.get("importance", 50)
+    try:
+        importance = int(importance_raw)
+    except (TypeError, ValueError):
+        importance = 50
+    importance = max(0, min(100, importance))
+
+    source = str(payload.get("source", "chat")).strip()[:40] or "chat"
+    session_id = str(payload.get("session_id", "")).strip() or None
+    tags_raw = payload.get("tags", [])
+    tags = []
+    if isinstance(tags_raw, list):
+        for item in tags_raw:
+            value = str(item or "").strip()
+            if value:
+                tags.append(value[:40])
+
+    now_iso = _utc_now_iso()
+    status, data = _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        payload={
+            "user_id": user_id,
+            "kind": kind,
+            "content": content,
+            "importance": importance,
+            "tags": tags,
+            "source": source,
+            "session_id": session_id,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        },
+        prefer="return=representation",
+    )
+    if status not in (200, 201):
+        return jsonify({"error": "supabase_insert_failed", "details": data}), 502
+
+    keep_limit = _get_agent_max_memories_per_user()
+    _, prune_error = _prune_agent_memories(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        keep_limit=keep_limit,
+    )
+    if prune_error:
+        return jsonify({"error": prune_error, "details": {"keep_limit": keep_limit}}), 502
+
+    rows = data if isinstance(data, list) else []
+    memory = rows[0] if rows else None
+    return jsonify({"ok": True, "memory": memory}), 201
+
+
+@app.delete("/agent/memories/<memory_id>")
+def agent_memories_delete(memory_id: str):
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    target_id = str(memory_id).strip()
+    if not target_id:
+        return jsonify({"error": "invalid_memory_id"}), 400
+
+    status, data = _supabase_rest_request(
+        method="DELETE",
+        path="/rest/v1/agent_memories",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "id": f"eq.{target_id}",
+            "user_id": f"eq.{user_id}",
+        },
+        prefer="return=representation",
+    )
+    if status not in (200, 204):
+        return jsonify({"error": "supabase_delete_failed", "details": data}), 502
+
+    deleted_count = len(data) if isinstance(data, list) else 0
+    return jsonify({"ok": True, "deleted_count": deleted_count})
+
+
+@app.get("/agent/tasks")
+def agent_tasks_list():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+
+    query = {
+        "select": "id,title,details,status,priority,due_at,done_at,source,created_at,updated_at",
+        "user_id": f"eq.{user_id}",
+        "order": "updated_at.desc,created_at.desc,id.desc",
+        "limit": str(limit),
+        "offset": str(offset),
+    }
+    status_filter = str(request.args.get("status", "")).strip().lower()
+    if status_filter in _ALLOWED_AGENT_TASK_STATUS:
+        query["status"] = f"eq.{status_filter}"
+
+    status_code, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_tasks",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query=query,
+    )
+    if status_code != 200:
+        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    return jsonify({"ok": True, "tasks": rows})
+
+
+@app.post("/agent/tasks")
+def agent_tasks_create():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    title = str(payload.get("title", "")).strip()
+    if not title:
+        return jsonify({"error": "missing_title"}), 400
+    if len(title) > AGENT_TASK_TITLE_LIMIT:
+        return jsonify({"error": "title_too_long", "limit": AGENT_TASK_TITLE_LIMIT}), 400
+
+    details = str(payload.get("details", "")).strip()
+    if len(details) > AGENT_TASK_DETAILS_LIMIT:
+        return jsonify({"error": "details_too_long", "limit": AGENT_TASK_DETAILS_LIMIT}), 400
+
+    task_status = _normalize_agent_task_status(payload.get("status", "open"))
+    priority = _normalize_agent_task_priority(payload.get("priority", "normal"))
+    due_at = payload.get("due_at")
+    due_at = str(due_at).strip() if due_at is not None else None
+    if due_at == "":
+        due_at = None
+    source = str(payload.get("source", "agent")).strip()[:40] or "agent"
+
+    now_iso = _utc_now_iso()
+    status_code, data = _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/agent_tasks",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        payload={
+            "user_id": user_id,
+            "title": title,
+            "details": details,
+            "status": task_status,
+            "priority": priority,
+            "due_at": due_at,
+            "done_at": now_iso if task_status == "done" else None,
+            "source": source,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        },
+        prefer="return=representation",
+    )
+    if status_code not in (200, 201):
+        return jsonify({"error": "supabase_insert_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    task = rows[0] if rows else None
+    return jsonify({"ok": True, "task": task}), 201
+
+
+@app.patch("/agent/tasks/<task_id>")
+def agent_tasks_update(task_id: str):
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    target_id = str(task_id).strip()
+    if not target_id:
+        return jsonify({"error": "invalid_task_id"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    patch_doc: dict[str, str | None] = {"updated_at": _utc_now_iso()}
+
+    if "title" in payload:
+        title = str(payload.get("title", "")).strip()
+        if not title:
+            return jsonify({"error": "empty_title"}), 400
+        if len(title) > AGENT_TASK_TITLE_LIMIT:
+            return jsonify({"error": "title_too_long", "limit": AGENT_TASK_TITLE_LIMIT}), 400
+        patch_doc["title"] = title
+
+    if "details" in payload:
+        details = str(payload.get("details", "")).strip()
+        if len(details) > AGENT_TASK_DETAILS_LIMIT:
+            return jsonify({"error": "details_too_long", "limit": AGENT_TASK_DETAILS_LIMIT}), 400
+        patch_doc["details"] = details
+
+    if "priority" in payload:
+        patch_doc["priority"] = _normalize_agent_task_priority(payload.get("priority", "normal"))
+
+    if "status" in payload:
+        task_status = _normalize_agent_task_status(payload.get("status", "open"))
+        patch_doc["status"] = task_status
+        patch_doc["done_at"] = _utc_now_iso() if task_status == "done" else None
+
+    if "due_at" in payload:
+        due_at = payload.get("due_at")
+        due_at = str(due_at).strip() if due_at is not None else None
+        patch_doc["due_at"] = due_at or None
+
+    if len(patch_doc) == 1:
+        return jsonify({"error": "no_patch_fields"}), 400
+
+    status_code, data = _supabase_rest_request(
+        method="PATCH",
+        path="/rest/v1/agent_tasks",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "id": f"eq.{target_id}",
+            "user_id": f"eq.{user_id}",
+        },
+        payload=patch_doc,
+        prefer="return=representation",
+    )
+    if status_code not in (200, 204):
+        return jsonify({"error": "supabase_update_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    task = rows[0] if rows else None
+    if not task:
+        return jsonify({"error": "task_not_found"}), 404
+    return jsonify({"ok": True, "task": task})
+
+
+@app.post("/agent/tool-logs")
+def agent_tool_logs_create():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    tool_name = str(payload.get("tool_name", "")).strip()
+    if not tool_name:
+        return jsonify({"error": "missing_tool_name"}), 400
+    tool_name = tool_name[:80]
+
+    call_status = str(payload.get("status", "success")).strip().lower()
+    if call_status not in {"success", "error", "skipped"}:
+        call_status = "success"
+
+    input_text = str(payload.get("input", "")).strip()
+    output_text = str(payload.get("output", "")).strip()
+    error_text = str(payload.get("error", "")).strip()
+    if len(input_text) > AGENT_TOOL_LOG_TEXT_LIMIT:
+        input_text = input_text[:AGENT_TOOL_LOG_TEXT_LIMIT]
+    if len(output_text) > AGENT_TOOL_LOG_TEXT_LIMIT:
+        output_text = output_text[:AGENT_TOOL_LOG_TEXT_LIMIT]
+    if len(error_text) > AGENT_TOOL_LOG_TEXT_LIMIT:
+        error_text = error_text[:AGENT_TOOL_LOG_TEXT_LIMIT]
+
+    latency_ms_raw = payload.get("latency_ms", 0)
+    try:
+        latency_ms = max(0, int(latency_ms_raw))
+    except (TypeError, ValueError):
+        latency_ms = 0
+
+    now_iso = _utc_now_iso()
+    status_code, data = _supabase_rest_request(
+        method="POST",
+        path="/rest/v1/agent_tool_logs",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        payload={
+            "user_id": user_id,
+            "tool_name": tool_name,
+            "status": call_status,
+            "input": input_text,
+            "output": output_text,
+            "error": error_text,
+            "latency_ms": latency_ms,
+            "created_at": now_iso,
+        },
+        prefer="return=representation",
+    )
+    if status_code not in (200, 201):
+        return jsonify({"error": "supabase_insert_failed", "details": data}), 502
+
+    keep_limit = _get_agent_max_tool_logs_per_user()
+    _, prune_error = _prune_agent_tool_logs(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        user_id=user_id,
+        keep_limit=keep_limit,
+    )
+    if prune_error:
+        return jsonify({"error": prune_error, "details": {"keep_limit": keep_limit}}), 502
+
+    rows = data if isinstance(data, list) else []
+    log_row = rows[0] if rows else None
+    return jsonify({"ok": True, "tool_log": log_row}), 201
+
+
+@app.get("/agent/tool-logs")
+def agent_tool_logs_list():
+    supabase_url, service_key, user_id = _resolve_authed_user()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+    if user_id is None:
+        token = _extract_bearer_token()
+        if not token:
+            return jsonify({"error": "missing_bearer"}), 401
+        return jsonify({"error": "invalid_token"}), 401
+
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+
+    status_code, data = _supabase_rest_request(
+        method="GET",
+        path="/rest/v1/agent_tool_logs",
+        supabase_url=supabase_url,
+        service_key=service_key,
+        query={
+            "select": "id,tool_name,status,latency_ms,error,created_at",
+            "user_id": f"eq.{user_id}",
+            "order": "created_at.desc,id.desc",
+            "limit": str(limit),
+            "offset": str(offset),
+        },
+    )
+    if status_code != 200:
+        return jsonify({"error": "supabase_query_failed", "details": data}), 502
+
+    rows = data if isinstance(data, list) else []
+    return jsonify({"ok": True, "tool_logs": rows})
 
 
 @app.post("/detect")
