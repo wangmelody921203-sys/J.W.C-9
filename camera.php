@@ -62,9 +62,47 @@ unlink($temp_file);
 
 if ($exit_code === 0 && !empty($output)) {
     $result = json_decode(implode("\n", $output), true);
+    if (!is_array($result)) {
+        $result = [];
+    }
+    $result['stress'] = read_latest_stress();
     echo json_encode($result);
 } else {
-    echo json_encode(['error' => 'Detection failed']);
+    echo json_encode([
+        'error' => 'Detection failed',
+        'stress' => read_latest_stress(),
+    ]);
+}
+
+function read_latest_stress(): array
+{
+  $default = [
+    'source' => 'unavailable',
+    'timestamp' => 0,
+    'is_stale' => true,
+    'sensor_value' => 0,
+    'smoothed_value' => 0.0,
+    'normalized' => 0.0,
+    'stress_score' => 0,
+    'stress_level' => 'unknown',
+  ];
+
+  $file = __DIR__ . '/emotion_output/latest_stress.json';
+  if (!file_exists($file)) {
+    return $default;
+  }
+
+  $raw = @file_get_contents($file);
+  if ($raw === false) {
+    return $default;
+  }
+
+  $decoded = json_decode($raw, true);
+  if (!is_array($decoded)) {
+    return $default;
+  }
+
+  return array_merge($default, $decoded);
 }
 
 function detect_python_executable(): ?string

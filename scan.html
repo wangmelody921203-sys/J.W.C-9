@@ -1337,6 +1337,7 @@
         <div class="result-label">Dominant Emotion</div>
         <div id="emotion-value" class="emotion-value">等待掃描</div>
         <div id="emotion-share" class="emotion-share">尚未產生本輪結果</div>
+        <div id="stress-share" class="emotion-share">壓力感測：未連線</div>
         <div id="status-box" class="status-box">請先開啟鏡頭。啟動後會立刻進入 5 秒偵測，結束後自動關閉攝影機。</div>
       </section>
 
@@ -1489,7 +1490,9 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script>
-    const API_BASE = "https://j-w-c-9.onrender.com";
+    const API_BASE = (location.hostname === "127.0.0.1" || location.hostname === "localhost")
+      ? "http://127.0.0.1:8000"
+      : "https://j-w-c-9.onrender.com";
     const SUPABASE_URL = "https://yqcyyenuksulrbyvzpkv.supabase.co";
     const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_j_OyZ2FEwbkcX99P26xZGA_abp1yqrQ";
     const SCAN_STORAGE_KEY = "emotionSense.latestScan";
@@ -1586,6 +1589,7 @@
     const progressBar = document.getElementById("progress-bar");
     const emotionValue = document.getElementById("emotion-value");
     const emotionShare = document.getElementById("emotion-share");
+    const stressShare = document.getElementById("stress-share");
     const statusBox = document.getElementById("status-box");
     const probList = document.getElementById("prob-list");
     const musicGrid = document.getElementById("music-grid");
@@ -1628,6 +1632,7 @@
     let running = false;
     let inFlight = false;
     let lastProbabilities = null;
+    let latestStress = null;
     const votes = {};
 
     const WEEKDAY_ZH = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
@@ -1897,6 +1902,42 @@
         return 0;
       }
       return Math.max(0, Math.min(100, n * 100));
+    }
+
+    function normalizeStressSnapshot(stress) {
+      if (!stress || typeof stress !== "object") {
+        return null;
+      }
+      const score = Number(stress.stress_score ?? 0);
+      return {
+        score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
+        level: String(stress.stress_level || "unknown").toLowerCase(),
+        stale: Boolean(stress.is_stale),
+      };
+    }
+
+    function renderStressLine(stress) {
+      if (!stressShare) {
+        return;
+      }
+      if (!stress) {
+        stressShare.textContent = "壓力感測：未連線";
+        return;
+      }
+
+      if (stress.stale) {
+        stressShare.textContent = "壓力感測：資料暫時中斷";
+        return;
+      }
+
+      const levelMap = {
+        low: "低",
+        medium: "中",
+        high: "高",
+        unknown: "未知",
+      };
+      const levelText = levelMap[stress.level] || "未知";
+      stressShare.textContent = `壓力感測：${Math.round(stress.score)} / 100（${levelText}）`;
     }
 
     function resolveSongCategoryMeta(song, fallbackEmotion = "unknown") {
@@ -2338,6 +2379,7 @@
       emotionValue.textContent = EMOTION_LABELS_ZH[emotion] || emotion;
       emotionValue.classList.add("reveal");
       emotionShare.textContent = `本輪最高佔比 ${share}%`;
+      renderStressLine(latestStress);
     }
 
     function setStatus(message) {
@@ -2906,6 +2948,8 @@
 
         const data = await response.json();
         const emotion = data.dominant_emotion || "unknown";
+        latestStress = normalizeStressSnapshot(data.stress);
+        renderStressLine(latestStress);
         lastProbabilities = data.all_probabilities || lastProbabilities;
 
         if (!["unknown", "uncertain", "no_face"].includes(emotion)) {
@@ -2991,12 +3035,16 @@
       const latestScan = {
         emotion: resolvedEmotion,
         share,
+        stress_score: latestStress ? Math.round(latestStress.score) : null,
+        stress_level: latestStress ? latestStress.level : "unknown",
         timestamp: new Date().toISOString(),
       };
       addMoodDiaryEntry({
         timestamp: latestScan.timestamp,
         emotion: resolvedEmotion,
         share,
+        stress_score: latestStress ? Math.round(latestStress.score) : null,
+        stress_level: latestStress ? latestStress.level : "unknown",
         songs: (selectedSongs || []).map((song) => ({
           title: song.title,
           type: song.type,
@@ -3032,7 +3080,9 @@
 
         running = true;
         lastProbabilities = null;
+        latestStress = null;
         resetVotes();
+        renderStressLine(latestStress);
         scannerIdle.style.display = "none";
         cameraVideo.style.display = "block";
         scanEffect.classList.add("active");

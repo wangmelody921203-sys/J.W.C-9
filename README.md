@@ -58,6 +58,38 @@
 
 - 程式會每秒輸出 15 秒統計結果到 emotion_output/latest_emotion.json
 - 欄位包含 dominant_emotion、dominant_share、vote_ratios、probability_ratios
+- 若壓力檢測橋接程式有啟動，`latest_emotion.json` 會額外包含 `stress` 欄位
+
+## 壓力檢測器（Arduino FSR）整合
+
+已支援你的 Arduino 序列埠輸出（每秒送 0~1023 整數）。
+
+1. 先把 Arduino 上傳你的 `sketch_jun1c.ino`。
+2. 找到 Arduino 對應的 COM 埠（例如 `COM4`）。
+3. 在專案根目錄執行：
+
+```powershell
+& ".venv/Scripts/python.exe" stress_serial_bridge.py --port COM4 --baud 9600
+```
+
+或直接用批次檔：
+
+```powershell
+run_stress.bat COM4
+```
+
+執行後會持續更新 `emotion_output/latest_stress.json`，並且：
+
+- `emotion_output/latest_emotion.json` 會自動附上 `stress`
+- `POST /detect` 回傳會包含 `stress`
+- `GET /stress/latest` 可直接讀目前壓力值
+
+`stress` 欄位主要內容：
+
+- `sensor_value`：原始值（0~1023）
+- `stress_score`：換算分數（0~100）
+- `stress_level`：`low` / `medium` / `high`
+- `is_stale`：資料是否逾時（序列資料中斷時會變 `true`）
 
 ## 三頁流程
 

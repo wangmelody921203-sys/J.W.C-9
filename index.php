@@ -270,6 +270,8 @@ $queries = $emotionQueries[$emotion] ?? $emotionQueries['unknown'];
       <div id="detection-result" style="margin-top: 12px; padding: 12px; background: #f0fdf4; border-radius: 10px; display: none;">
         <p><strong>檢測結果：</strong> <span id="result-emotion">-</span></p>
         <p><strong>信心度：</strong> <span id="result-confidence">-</span></p>
+        <p><strong>壓力指數：</strong> <span id="result-stress-score">-</span></p>
+        <p><strong>壓力等級：</strong> <span id="result-stress-level">-</span></p>
       </div>
     </section>
   </div>
@@ -282,6 +284,29 @@ const canvas = document.getElementById('camera-canvas');
 const resultDiv = document.getElementById('detection-result');
 const emotionSpan = document.getElementById('result-emotion');
 const confidenceSpan = document.getElementById('result-confidence');
+const stressScoreSpan = document.getElementById('result-stress-score');
+const stressLevelSpan = document.getElementById('result-stress-level');
+
+function renderStress(stress) {
+  if (!stress || typeof stress !== 'object') {
+    stressScoreSpan.textContent = '-';
+    stressLevelSpan.textContent = '未連線';
+    return;
+  }
+
+  const score = Number(stress.stress_score ?? 0);
+  const safeScore = Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : 0;
+  const level = String(stress.stress_level || 'unknown').toLowerCase();
+  const levelMap = {
+    low: '低',
+    medium: '中',
+    high: '高',
+    unknown: '未知',
+  };
+
+  stressScoreSpan.textContent = `${safeScore} / 100`;
+  stressLevelSpan.textContent = stress.is_stale ? '資料中斷' : (levelMap[level] || '未知');
+}
 
 let stream = null;
 let video = null;
@@ -324,6 +349,7 @@ startBtn.addEventListener('click', async () => {
             
             if (response.ok) {
               const data = await response.json();
+              renderStress(data.stress);
               if (data.dominant_emotion && data.dominant_emotion !== 'no_face') {
                 emotionSpan.textContent = data.dominant_emotion.toUpperCase();
                 confidenceSpan.textContent = (data.confidence * 100).toFixed(1) + '%';
@@ -356,6 +382,8 @@ stopBtn.addEventListener('click', () => {
   }
   canvas.style.display = 'none';
   resultDiv.style.display = 'none';
+  stressScoreSpan.textContent = '-';
+  stressLevelSpan.textContent = '-';
   startBtn.style.display = 'inline-block';
   stopBtn.style.display = 'none';
   statusDiv.textContent = '';

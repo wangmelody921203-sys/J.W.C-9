@@ -30,6 +30,8 @@ EMOTION_LABELS = [
 ACTIVE_CLASS_INDICES = [1, 3, 4, 5, 6, 7]
 WINDOW_SECONDS = 5
 OUTPUT_FILE = Path("emotion_output/latest_emotion.json")
+STRESS_OUTPUT_FILE = Path("emotion_output/latest_stress.json")
+STRESS_STALE_SECONDS = 5
 
 
 def parse_args() -> argparse.Namespace:
@@ -332,6 +334,47 @@ def summarize_window(samples: deque[tuple[float, np.ndarray]]) -> tuple[str, flo
     return dominant, dominant_share, prob_map, vote_map, len(samples)
 
 
+def _default_stress_payload(source: str = "unavailable") -> dict:
+    return {
+        "source": source,
+        "timestamp": 0,
+        "is_stale": True,
+        "sensor_value": 0,
+        "smoothed_value": 0.0,
+        "normalized": 0.0,
+        "stress_score": 0,
+        "stress_level": "unknown",
+    }
+
+
+def load_stress_snapshot(stress_file: Path = STRESS_OUTPUT_FILE, stale_seconds: int = STRESS_STALE_SECONDS) -> dict:
+    if not stress_file.exists():
+        return _default_stress_payload("missing")
+
+    try:
+        raw = json.loads(stress_file.read_text(encoding="utf-8"))
+    except Exception:
+        return _default_stress_payload("invalid_json")
+
+    if not isinstance(raw, dict):
+        return _default_stress_payload("invalid_payload")
+
+    ts = int(raw.get("timestamp") or 0)
+    now = int(time.time())
+    is_stale = (now - ts) > max(1, int(stale_seconds)) if ts > 0 else True
+
+    return {
+        "source": str(raw.get("source") or "serial_fsr"),
+        "timestamp": ts,
+        "is_stale": bool(raw.get("is_stale", is_stale)) or is_stale,
+        "sensor_value": int(raw.get("sensor_value") or 0),
+        "smoothed_value": float(raw.get("smoothed_value") or 0.0),
+        "normalized": float(raw.get("normalized") or 0.0),
+        "stress_score": int(raw.get("stress_score") or 0),
+        "stress_level": str(raw.get("stress_level") or "unknown"),
+    }
+
+
 def export_window_result(
     output_file: Path,
     dominant: str,
@@ -341,6 +384,7 @@ def export_window_result(
     sample_count: int,
 ) -> None:
     output_file.parent.mkdir(parents=True, exist_ok=True)
+    stress = load_stress_snapshot()
     payload = {
         "timestamp": int(time.time()),
         "window_seconds": WINDOW_SECONDS,
@@ -349,6 +393,7 @@ def export_window_result(
         "sample_count": sample_count,
         "probability_ratios": probability_ratios,
         "vote_ratios": vote_ratios,
+        "stress": stress,
     }
     output_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -363,6 +408,7 @@ def reset_output_result(output_file: Path, window_seconds: int = WINDOW_SECONDS)
         "sample_count": 0,
         "probability_ratios": empty,
         "vote_ratios": empty,
+        "stress": _default_stress_payload("unavailable"),
     }
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
