@@ -1491,6 +1491,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script>
     const API_BASE = "https://j-w-c-9.onrender.com";
+    const DETECT_API_BASE = new URLSearchParams(window.location.search).get("detectApi") || API_BASE;
     const SUPABASE_URL = "https://yqcyyenuksulrbyvzpkv.supabase.co";
     const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_j_OyZ2FEwbkcX99P26xZGA_abp1yqrQ";
     const SCAN_STORAGE_KEY = "emotionSense.latestScan";
@@ -1982,7 +1983,10 @@
         const share = Math.max(0, Math.min(100, Number(entry.share ?? 0))) / 100;
         const normalizedShare = Number.isFinite(share) ? share : 0;
         const moodScoreRaw = (EMOTION_SCORES[emotion] ?? 0) * Math.max(normalizedShare, 0.35);
-        const stressScoreRaw = (EMOTION_STRESS_WEIGHTS[emotion] ?? 0.2) * Math.max(normalizedShare, 0.35);
+        const stressFromSensor = Number(entry.stress_score);
+        const stressScoreRaw = Number.isFinite(stressFromSensor)
+          ? Math.max(0, Math.min(100, stressFromSensor)) / 100
+          : (EMOTION_STRESS_WEIGHTS[emotion] ?? 0.2) * Math.max(normalizedShare, 0.35);
         return {
           entry,
           date,
@@ -2413,12 +2417,17 @@
 
     function addMoodDiaryEntry(entry) {
       const entries = loadMoodDiary();
+      const rawStressScore = Number(entry.stress_score ?? 0);
+      const safeStressScore = Number.isFinite(rawStressScore) ? Math.max(0, Math.min(100, Math.round(rawStressScore))) : 0;
+      const safeStressLevel = String(entry.stress_level || "unknown").toLowerCase();
       const normalized = {
         client_entry_id: entry.client_entry_id || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         synced: Boolean(entry.synced),
         timestamp: entry.timestamp || new Date().toISOString(),
         emotion: entry.emotion || "unknown",
         share: entry.share || "0.0",
+        stress_score: safeStressScore,
+        stress_level: ["low", "medium", "high", "unknown"].includes(safeStressLevel) ? safeStressLevel : "unknown",
         songs: Array.isArray(entry.songs) ? entry.songs : [],
       };
       entries.unshift(normalized);
@@ -2592,6 +2601,7 @@
             ${deleteButton}
           </div>
           <div class="diary-emotion">${EMOTION_LABELS_ZH[entry.emotion] || entry.emotion} ・ 佔比 ${entry.share ?? "0.0"}%</div>
+          <div class="diary-meta">壓力指數 ${Math.max(0, Math.min(100, Number(entry.stress_score ?? 0))).toFixed(0)} / 100 ・ 等級 ${String(entry.stress_level || "unknown").toLowerCase()}</div>
           <div class="diary-songs">推薦：${songText}</div>
         `;
         diaryList.appendChild(row);
@@ -2741,6 +2751,8 @@
           timestamp: entry.timestamp,
           emotion: entry.emotion,
           share: entry.share,
+          stress_score: entry.stress_score ?? 0,
+          stress_level: entry.stress_level || "unknown",
           songs: entry.songs || [],
         })),
       };
@@ -2934,7 +2946,7 @@
         ctx.drawImage(cameraVideo, 0, 0, captureCanvas.width, captureCanvas.height);
         const frame = captureCanvas.toDataURL("image/jpeg", 0.58);
 
-        const response = await fetch(`${API_BASE}/detect`, {
+        const response = await fetch(`${DETECT_API_BASE}/detect`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ frame }),

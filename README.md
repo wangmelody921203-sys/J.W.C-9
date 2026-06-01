@@ -450,6 +450,23 @@ X-Agent-Admin-Token: <AGENT_ADMIN_TOKEN>
 - share
 - scan_timestamp
 
+## 登入使用者壓力值雲端聯動
+
+`scan.html` 現在會把每次掃描的壓力值一起送到 `/diary/sync`：
+
+- `stress_score`（0~100）
+- `stress_level`（low / medium / high / unknown）
+
+建議在 Supabase `mood_entries` 表補上欄位（若未補，後端會自動 fallback，不會中斷同步）：
+
+```sql
+alter table public.mood_entries
+	add column if not exists stress_score int not null default 0;
+
+alter table public.mood_entries
+	add column if not exists stress_level text not null default 'unknown';
+```
+
 ## 白噪音音檔
 
 - 首頁預設讀取專案根目錄的 white-noise.mp3。

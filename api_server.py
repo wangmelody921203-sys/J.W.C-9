@@ -1343,6 +1343,15 @@ def _sanitize_diary_entries(raw_entries: list, user_id: str) -> list[dict]:
             share = float(row.get("share", 0.0))
         except (TypeError, ValueError):
             share = 0.0
+        try:
+            stress_score = int(row.get("stress_score", 0))
+        except (TypeError, ValueError):
+            stress_score = 0
+        stress_level = str(row.get("stress_level", "unknown")).strip().lower()
+        if stress_level not in {"low", "medium", "high", "unknown"}:
+            stress_level = "unknown"
+
+        stress_score = max(0, min(100, stress_score))
         songs = row.get("songs", [])
         safe_songs = []
         if isinstance(songs, list):
@@ -1365,10 +1374,29 @@ def _sanitize_diary_entries(raw_entries: list, user_id: str) -> list[dict]:
                 "detected_at": detected_at,
                 "emotion": emotion,
                 "share": round(max(0.0, share), 1),
+                "stress_score": stress_score,
+                "stress_level": stress_level,
                 "songs": safe_songs,
             }
         )
     return cleaned
+
+
+def _strip_diary_stress_fields(entries: list[dict]) -> list[dict]:
+    stripped: list[dict] = []
+    for row in entries:
+        if not isinstance(row, dict):
+            continue
+        copy_row = dict(row)
+        copy_row.pop("stress_score", None)
+        copy_row.pop("stress_level", None)
+        stripped.append(copy_row)
+    return stripped
+
+
+def _is_supabase_missing_column_error(details: object, column_names: tuple[str, ...]) -> bool:
+    text = json.dumps(details, ensure_ascii=False).lower() if details is not None else ""
+    return "column" in text and any(name.lower() in text for name in column_names)
 
 
 def _append_pending_feedback(payload: dict) -> None:
@@ -1511,7 +1539,20 @@ def diary_sync():
         prefer="resolution=ignore-duplicates,return=representation",
     )
     if status not in (200, 201):
-        return jsonify({"error": "supabase_insert_failed", "details": data}), 502
+        # Backward compatibility: older mood_entries schema may not have stress columns yet.
+        if _is_supabase_missing_column_error(data, ("stress_score", "stress_level")):
+            legacy_entries = _strip_diary_stress_fields(cleaned_entries)
+            status, data = _supabase_rest_request(
+                method="POST",
+                path="/rest/v1/mood_entries",
+                supabase_url=supabase_url,
+                service_key=service_key,
+                query={"on_conflict": "user_id,client_entry_id"},
+                payload=legacy_entries,
+                prefer="resolution=ignore-duplicates,return=representation",
+            )
+        if status not in (200, 201):
+            return jsonify({"error": "supabase_insert_failed", "details": data}), 502
 
     pruned_count, prune_error = _prune_user_diary_entries(
         supabase_url=supabase_url,
@@ -1570,7 +1611,7 @@ def diary_list():
         supabase_url=supabase_url,
         service_key=service_key,
         query={
-            "select": "id,client_entry_id,detected_at,emotion,share,songs,created_at",
+            "select": "id,client_entry_id,detected_at,emotion,share,stress_score,stress_level,songs,created_at",
             "user_id": f"eq.{user_id}",
             "order": "detected_at.desc",
             "limit": str(limit),
@@ -1580,6 +1621,21 @@ def diary_list():
     
     print(f"[DIARY LIST] Supabase response status: {status}")
     
+    if status != 200 and _is_supabase_missing_column_error(data, ("stress_score", "stress_level")):
+        status, data = _supabase_rest_request(
+            method="GET",
+            path="/rest/v1/mood_entries",
+            supabase_url=supabase_url,
+            service_key=service_key,
+            query={
+                "select": "id,client_entry_id,detected_at,emotion,share,songs,created_at",
+                "user_id": f"eq.{user_id}",
+                "order": "detected_at.desc",
+                "limit": str(limit),
+                "offset": str(offset),
+            },
+        )
+
     if status != 200:
         print(f"[DIARY LIST] Supabase error: {data}")
         return jsonify({"error": "supabase_query_failed", "details": data}), 502
