@@ -5,6 +5,11 @@
 const int fsrPin = A0;      // 壓力感測器接在類比腳位 A0
 const int ledPin = 3;       // 單色 LED 接在數位腳位 3 (支援 PWM)
 
+// --- 感測降敏參數（可依手感微調）---
+const int DEADZONE = 22;          // 小於此範圍的變化視為雜訊
+const float RESPONSE_GAMMA = 1.9; // >1 越大代表越不敏感（更不易衝高）
+const float LED_SMOOTH_ALPHA = 0.20;
+
 // --- 時間窗口控制參數 ---
 unsigned long lastLogTime = 0;     // 記錄上一次發送數據的時間
 const unsigned long interval = 1000; // 設定每隔多久要算一次平均傳給電腦（1秒）
@@ -13,17 +18,52 @@ const unsigned long interval = 1000; // 設定每隔多久要算一次平均傳�
 long sampleTotal = 0;       // 用來累加這 1 秒內所有讀取到的數值
 int sampleCount = 0;        // 記錄這 1 秒內到底讀取了幾次
 
+int baseline = 0;           // 開機時自動校正的基準值
+float ledFiltered = 0.0;    // LED 顯示用 EMA 濾波
+
+int convertRawToScaled(int raw) {
+  int adjusted = raw - baseline - DEADZONE;
+  if (adjusted < 0) {
+    adjusted = 0;
+  }
+
+  int dynamicMax = 1023 - baseline - DEADZONE;
+  if (dynamicMax < 1) {
+    dynamicMax = 1;
+  }
+
+  float normalized = (float)adjusted / (float)dynamicMax;
+  normalized = constrain(normalized, 0.0, 1.0);
+
+  // 非線性壓縮：小力更平緩，大力才會接近滿分
+  float curved = pow(normalized, RESPONSE_GAMMA);
+  int scaled = (int)(curved * 1023.0 + 0.5);
+  return constrain(scaled, 0, 1023);
+}
+
 void setup() {
   Serial.begin(9600);      // 啟動序列埠通訊
   pinMode(ledPin, OUTPUT); // LED 為輸出模式
+
+  // 開機前 1 秒抓環境基準值，避免每塊板子的零點偏移造成過敏
+  long sum = 0;
+  const int calibrateCount = 220;
+  for (int i = 0; i < calibrateCount; i++) {
+    sum += analogRead(fsrPin);
+    delay(4);
+  }
+  baseline = (int)(sum / calibrateCount);
 }
 
 void loop() {
   // 【步驟 1】無論何時，Arduino 都在全速讀取壓力並提供即時的 LED 視覺回饋
   int rawValue = analogRead(fsrPin);
-  
-  // LED 依然維持極度即時的微秒級反應
-  int ledBrightness = map(rawValue, 560, 1023, 0, 255); // 讓 LED 亮度也適應新電腦的範圍
+
+  int scaledInstant = convertRawToScaled(rawValue);
+
+  // LED 走低通濾波，避免一點點抖動就閃很大
+  ledFiltered = (1.0 - LED_SMOOTH_ALPHA) * ledFiltered + LED_SMOOTH_ALPHA * (float)scaledInstant;
+  int ledBrightness = map((int)ledFiltered, 0, 1023, 0, 255);
   ledBrightness = constrain(ledBrightness, 0, 255);
   analogWrite(ledPin, ledBrightness);
 
@@ -35,19 +75,13 @@ void loop() {
   unsigned long currentMillis = millis(); 
   
   if (currentMillis - lastLogTime >= interval) {
-    
-    // 1. 計算這 1 秒內的最終原始平均值（此時範圍在 560 ~ 1023 之間）
+    if (sampleCount <= 0) {
+      sampleCount = 1;
+    }
+
+    // 1. 計算 1 秒內的平均值，再做降敏轉換
     int finalAverage = sampleTotal / sampleCount;
-    
-    // ====================================================
-    // :star:【資工黑科技：動態範圍縮放】:star:
-    // 把 560~1023 的尷尬範圍，完美映射放大到 0~1023 的標準範圍
-    // ====================================================
-    int scaledValue = map(finalAverage, 560, 1023, 0, 1023); 
-    
-    // 防呆機制：限制輸出的數字絕對要在 0 ~ 1023 之間，不可以爆出去
-    scaledValue = constrain(scaledValue, 0, 1023); 
-    // ====================================================
+    int scaledValue = convertRawToScaled(finalAverage);
     
     // 2. 【丟數據】將這個被軟體放大、完美的數字噴給 Vibe Coding
     Serial.println(scaledValue);
