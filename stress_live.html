@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>壓力感測即時波動 | EmotionSense AI</title>
+  <style>
+    :root {
+      --bg: #071019;
+      --panel: rgba(13, 21, 33, 0.86);
+      --line: rgba(255, 255, 255, 0.1);
+      --text: #eef3fb;
+      --muted: #9eb2cb;
+      --low: #45d98f;
+      --mid: #f5be52;
+      --high: #ef6b6b;
+      --stale: #95a3b8;
+      --accent: #67b2ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at 15% 15%, rgba(103, 178, 255, 0.18), transparent 25%),
+        radial-gradient(circle at 85% 8%, rgba(69, 217, 143, 0.12), transparent 22%),
+        linear-gradient(180deg, #060d15, #0a1422);
+      color: var(--text);
+      font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 30px));
+      margin: 22px auto 34px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 16px;
+      backdrop-filter: blur(14px);
+    }
+
+    .hero {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(24px, 4vw, 36px);
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .link-btn {
+      text-decoration: none;
+      color: #051120;
+      background: linear-gradient(135deg, #7dd5ff, #67b2ff);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-weight: 800;
+    }
+
+    .control {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1.6fr 130px 130px;
+      align-items: center;
+    }
+
+    .input {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font-size: 14px;
+    }
+
+    .btn {
+      border: 1px solid transparent;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn.start { background: #1f8f53; color: #e9fff3; }
+    .btn.stop { background: #384456; color: #e3e9f4; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr 1fr;
+      gap: 10px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 12px;
+      min-height: 96px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .value {
+      margin-top: 8px;
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .value.small { font-size: 24px; }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 6px 11px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--stale);
+      box-shadow: 0 0 0 6px rgba(149, 163, 184, 0.15);
+    }
+
+    .chart-wrap {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(2, 7, 14, 0.54);
+      padding: 10px;
+    }
+
+    #stress-chart {
+      width: 100%;
+      height: 300px;
+      display: block;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 860px) {
+      .control { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: 1fr 1fr; }
+      .value { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="panel hero">
+      <div>
+        <h1>壓力感測即時波動面板</h1>
+        <p>接上 Arduino 壓力檢測器後，會每秒更新目前壓力分數與波動趨勢。</p>
+      </div>
+      <a class="link-btn" href="./home.html">回首頁</a>
+    </section>
+
+    <section class="panel">
+      <div class="control">
+        <input id="api-base" class="input" type="text" placeholder="http://127.0.0.1:8000" aria-label="API Base URL">
+        <button id="start-btn" class="btn start" type="button">開始監測</button>
+        <button id="stop-btn" class="btn stop" type="button">停止監測</button>
+      </div>
+      <p class="hint" style="margin:10px 0 0;">建議先啟動：1) stress_serial_bridge.py 2) api_server.py，再開此頁。你也可用網址參數 `?api=http://127.0.0.1:8000` 指定 API。</p>
+    </section>
+
+    <section class="panel">
+      <div class="stats">
+        <article class="card">
+          <div class="label">壓力分數</div>
+          <div id="score-value" class="value">--</div>
+        </article>
+        <article class="card">
+          <div class="label">壓力等級</div>
+          <div id="level-value" class="value small">未知</div>
+        </article>
+        <article class="card">
+          <div class="label">原始感測值</div>
+          <div id="sensor-value" class="value small">--</div>
+        </article>
+        <article class="card">
+          <div class="label">最後更新</div>
+          <div id="updated-value" class="value small">--</div>
+        </article>
+      </div>
+      <div style="margin-top:12px;">
+        <span class="status-pill"><span id="status-dot" class="dot"></span><span id="status-text">尚未啟動監測</span></span>
+      </div>
+    </section>
+
+    <section class="panel chart-wrap">
+      <canvas id="stress-chart" width="1000" height="300"></canvas>
+      <p class="hint" style="margin:10px 2px 2px;">圖上顯示最近 120 秒壓力分數（0~100），顏色隨等級變化：低=綠，中=黃，高=紅。</p>
+    </section>
+  </main>
+
+  <script>
+    const STORAGE_KEY = "stress.monitor.api.base";
+    const MAX_POINTS = 120;
+    const POLL_MS = 1000;
+
+    const params = new URLSearchParams(window.location.search);
+    const apiInput = document.getElementById("api-base");
+    const startBtn = document.getElementById("start-btn");
+    const stopBtn = document.getElementById("stop-btn");
+    const scoreValue = document.getElementById("score-value");
+    const levelValue = document.getElementById("level-value");
+    const sensorValue = document.getElementById("sensor-value");
+    const updatedValue = document.getElementById("updated-value");
+    const statusDot = document.getElementById("status-dot");
+    const statusText = document.getElementById("status-text");
+    const chart = document.getElementById("stress-chart");
+    const ctx = chart.getContext("2d");
+
+    let timer = null;
+    let points = [];
+
+    function normalizeApiBase(value) {
+      const text = String(value || "").trim().replace(/\/$/, "");
+      return text || "http://127.0.0.1:8000";
+    }
+
+    function resolveApiBase() {
+      const fromQuery = params.get("api");
+      const fromStorage = localStorage.getItem(STORAGE_KEY);
+      return normalizeApiBase(fromQuery || fromStorage || "http://127.0.0.1:8000");
+    }
+
+    function colorByLevel(level, stale) {
+      if (stale) return getComputedStyle(document.documentElement).getPropertyValue("--stale").trim();
+      if (level === "high") return getComputedStyle(document.documentElement).getPropertyValue("--high").trim();
+      if (level === "medium") return getComputedStyle(document.documentElement).getPropertyValue("--mid").trim();
+      return getComputedStyle(document.documentElement).getPropertyValue("--low").trim();
+    }
+
+    function levelText(level) {
+      if (level === "high") return "高";
+      if (level === "medium") return "中";
+      if (level === "low") return "低";
+      return "未知";
+    }
+
+    function setStatus(message, color) {
+      statusText.textContent = message;
+      statusDot.style.background = color;
+      statusDot.style.boxShadow = `0 0 0 6px ${color}33`;
+    }
+
+    function formatTime(unixSeconds) {
+      const d = new Date(unixSeconds * 1000);
+      if (Number.isNaN(d.getTime())) return "--";
+      return d.toLocaleTimeString("zh-TW", { hour12: false });
+    }
+
+    function updateCards(payload) {
+      const score = Number(payload.stress_score ?? 0);
+      const level = String(payload.stress_level || "unknown").toLowerCase();
+      const stale = Boolean(payload.is_stale);
+      const sensor = Number(payload.sensor_value ?? 0);
+
+      scoreValue.textContent = Number.isFinite(score) ? String(Math.max(0, Math.min(100, Math.round(score)))) : "--";
+      levelValue.textContent = levelText(level) + (stale ? "（中斷）" : "");
+      sensorValue.textContent = Number.isFinite(sensor) ? String(Math.max(0, Math.min(1023, Math.round(sensor)))) : "--";
+      updatedValue.textContent = formatTime(Number(payload.timestamp || 0));
+
+      const color = colorByLevel(level, stale);
+      setStatus(stale ? "感測資料中斷或過舊" : "感測資料正常更新", color);
+    }
+
+    function addPoint(payload) {
+      const score = Number(payload.stress_score ?? 0);
+      const level = String(payload.stress_level || "unknown").toLowerCase();
+      const stale = Boolean(payload.is_stale);
+      points.push({
+        ts: Date.now(),
+        score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
+        level,
+        stale,
+      });
+      if (points.length > MAX_POINTS) {
+        points = points.slice(points.length - MAX_POINTS);
+      }
+    }
+
+    function drawChart() {
+      const w = chart.clientWidth;
+      const h = chart.clientHeight;
+      if (chart.width !== w || chart.height !== h) {
+        chart.width = w;
+        chart.height = h;
+      }
+
+      ctx.clearRect(0, 0, w, h);
+
+      const padL = 42;
+      const padR = 20;
+      const padT = 16;
+      const padB = 28;
+      const gw = w - padL - padR;
+      const gh = h - padT - padB;
+
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 5; i += 1) {
+        const y = padT + (gh * i) / 5;
+        ctx.beginPath();
+        ctx.moveTo(padL, y);
+        ctx.lineTo(w - padR, y);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = "#9eb2cb";
+      ctx.font = "12px Noto Sans TC";
+      for (let i = 0; i <= 5; i += 1) {
+        const v = 100 - i * 20;
+        const y = padT + (gh * i) / 5;
+        ctx.fillText(String(v), 8, y + 4);
+      }
+
+      if (!points.length) {
+        ctx.fillStyle = "#9eb2cb";
+        ctx.fillText("尚無資料，請先開始監測。", padL + 8, padT + 20);
+        return;
+      }
+
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      points.forEach((point, i) => {
+        const x = padL + (gw * i) / Math.max(1, points.length - 1);
+        const y = padT + gh * (1 - point.score / 100);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      const last = points[points.length - 1];
+      ctx.strokeStyle = colorByLevel(last.level, last.stale);
+      ctx.stroke();
+
+      const lastX = padL + (gw * (points.length - 1)) / Math.max(1, points.length - 1);
+      const lastY = padT + gh * (1 - last.score / 100);
+      ctx.fillStyle = colorByLevel(last.level, last.stale);
+      ctx.beginPath();
+      ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    async function tick() {
+      const base = normalizeApiBase(apiInput.value);
+      try {
+        const res = await fetch(`${base}/stress/latest`, { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        updateCards(data);
+        addPoint(data);
+        drawChart();
+      } catch (err) {
+        setStatus(`連線失敗：${err.message || "unknown"}`, "#95a3b8");
+      }
+    }
+
+    function startMonitoring() {
+      const base = normalizeApiBase(apiInput.value);
+      apiInput.value = base;
+      localStorage.setItem(STORAGE_KEY, base);
+      if (timer) {
+        clearInterval(timer);
+      }
+      setStatus("監測啟動中…", "#67b2ff");
+      tick();
+      timer = setInterval(tick, POLL_MS);
+    }
+
+    function stopMonitoring() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      setStatus("監測已停止", "#95a3b8");
+    }
+
+    apiInput.value = resolveApiBase();
+    startBtn.addEventListener("click", startMonitoring);
+    stopBtn.addEventListener("click", stopMonitoring);
+    window.addEventListener("resize", drawChart);
+
+    drawChart();
+    startMonitoring();
+  </script>
+</body>
+</html>
