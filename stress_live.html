@@ -172,8 +172,25 @@
       line-height: 1.6;
     }
 
+    .sub-control {
+      margin-top: 10px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
     @media (max-width: 860px) {
       .control { grid-template-columns: 1fr; }
+      .sub-control { grid-template-columns: 1fr; }
       .stats { grid-template-columns: 1fr 1fr; }
       .value { font-size: 28px; }
     }
@@ -194,6 +211,13 @@
         <input id="api-base" class="input" type="text" placeholder="http://127.0.0.1:8000" aria-label="API Base URL">
         <button id="start-btn" class="btn start" type="button">開始監測</button>
         <button id="stop-btn" class="btn stop" type="button">停止監測</button>
+      </div>
+      <div class="sub-control">
+        <label class="toggle">
+          <input id="mode-personal" type="checkbox" checked>
+          個人模式（使用登入者 token 讀取自己的壓力）
+        </label>
+        <input id="user-id" class="input" type="text" placeholder="可選：手動指定 user_id（未登入時使用）" aria-label="User ID">
       </div>
       <p class="hint" style="margin:10px 0 0;">建議先啟動：1) stress_serial_bridge.py 2) api_server.py，再開此頁。你也可用網址參數 `?api=http://127.0.0.1:8000` 指定 API。</p>
     </section>
@@ -230,13 +254,18 @@
 
   <script>
     const STORAGE_KEY = "stress.monitor.api.base";
+    const USER_ID_STORAGE_KEY = "stress.monitor.user.id";
+    const AUTH_TOKEN_SHARE_KEY = "emotion.auth.access_token";
     const MAX_POINTS = 120;
+    const HISTORY_BOOTSTRAP_LIMIT = 120;
     const POLL_MS = 1000;
 
     const params = new URLSearchParams(window.location.search);
     const apiInput = document.getElementById("api-base");
     const startBtn = document.getElementById("start-btn");
     const stopBtn = document.getElementById("stop-btn");
+    const modePersonalInput = document.getElementById("mode-personal");
+    const userIdInput = document.getElementById("user-id");
     const scoreValue = document.getElementById("score-value");
     const levelValue = document.getElementById("level-value");
     const sensorValue = document.getElementById("sensor-value");
@@ -251,13 +280,35 @@
 
     function normalizeApiBase(value) {
       const text = String(value || "").trim().replace(/\/$/, "");
-      return text || "http://127.0.0.1:8000";
+      if (text) {
+        return text;
+      }
+      if (location.protocol.startsWith("http") && location.host) {
+        return `${location.protocol}//${location.host}`;
+      }
+      return "http://127.0.0.1:8000";
     }
 
     function resolveApiBase() {
       const fromQuery = params.get("api");
       const fromStorage = localStorage.getItem(STORAGE_KEY);
-      return normalizeApiBase(fromQuery || fromStorage || "http://127.0.0.1:8000");
+      return normalizeApiBase(fromQuery || fromStorage || "");
+    }
+
+    function normalizeUserId(value) {
+      return String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 120);
+    }
+
+    function resolveUserId() {
+      const fromQuery = params.get("user_id") || params.get("user");
+      const fromStorage = localStorage.getItem(USER_ID_STORAGE_KEY);
+      return normalizeUserId(fromQuery || fromStorage || "");
+    }
+
+    function resolveAuthToken() {
+      const fromQuery = String(params.get("token") || "").trim();
+      const fromStorage = String(localStorage.getItem(AUTH_TOKEN_SHARE_KEY) || "").trim();
+      return fromQuery || fromStorage || "";
     }
 
     function colorByLevel(level, stale) {
@@ -305,14 +356,71 @@
       const score = Number(payload.stress_score ?? 0);
       const level = String(payload.stress_level || "unknown").toLowerCase();
       const stale = Boolean(payload.is_stale);
+      const ts = Number(payload.timestamp || 0);
       points.push({
-        ts: Date.now(),
+        ts: ts > 0 ? ts * 1000 : Date.now(),
         score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
         level,
         stale,
       });
       if (points.length > MAX_POINTS) {
         points = points.slice(points.length - MAX_POINTS);
+      }
+    }
+
+    function buildStressRequest(base) {
+      const personalMode = Boolean(modePersonalInput.checked);
+      const token = resolveAuthToken();
+      const userId = normalizeUserId(userIdInput.value);
+      const headers = {};
+      let latestUrl = `${base}/stress/latest`;
+      let historyUrl = "";
+
+      if (personalMode && token) {
+        latestUrl = `${base}/stress/user/latest`;
+        historyUrl = `${base}/stress/user/history?limit=${HISTORY_BOOTSTRAP_LIMIT}`;
+        headers["Authorization"] = `Bearer ${token}`;
+      } else if (userId) {
+        latestUrl = `${base}/stress/latest?user_id=${encodeURIComponent(userId)}`;
+      }
+
+      return { latestUrl, historyUrl, headers };
+    }
+
+    function loadHistoryPoints(entries) {
+      if (!Array.isArray(entries) || !entries.length) {
+        return 0;
+      }
+
+      const sorted = entries
+        .filter((entry) => entry && typeof entry === "object")
+        .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+
+      points = [];
+      sorted.forEach((entry) => addPoint(entry));
+      return points.length;
+    }
+
+    async function bootstrapHistory(base) {
+      const req = buildStressRequest(base);
+      if (!req.historyUrl) {
+        return;
+      }
+
+      try {
+        const res = await fetch(req.historyUrl, { cache: "no-store", headers: req.headers });
+        if (!res.ok) {
+          return;
+        }
+        const payload = await res.json();
+        const loadedCount = loadHistoryPoints(payload.entries);
+        if (loadedCount > 0) {
+          updateCards(payload.entries[payload.entries.length - 1]);
+          drawChart();
+          setStatus(`已載入 ${loadedCount} 筆歷史資料`, "#67b2ff");
+        }
+      } catch (_err) {
+        // Ignore history bootstrap failures and continue live polling.
       }
     }
 
@@ -379,8 +487,10 @@
 
     async function tick() {
       const base = normalizeApiBase(apiInput.value);
+      const req = buildStressRequest(base);
+
       try {
-        const res = await fetch(`${base}/stress/latest`, { cache: "no-store" });
+        const res = await fetch(req.latestUrl, { cache: "no-store", headers: req.headers });
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);
         }
@@ -393,15 +503,22 @@
       }
     }
 
-    function startMonitoring() {
+    async function startMonitoring() {
       const base = normalizeApiBase(apiInput.value);
       apiInput.value = base;
+      userIdInput.value = normalizeUserId(userIdInput.value);
       localStorage.setItem(STORAGE_KEY, base);
+      if (userIdInput.value) {
+        localStorage.setItem(USER_ID_STORAGE_KEY, userIdInput.value);
+      }
       if (timer) {
         clearInterval(timer);
       }
+      points = [];
+      drawChart();
       setStatus("監測啟動中…", "#67b2ff");
-      tick();
+      await bootstrapHistory(base);
+      await tick();
       timer = setInterval(tick, POLL_MS);
     }
 
@@ -414,6 +531,7 @@
     }
 
     apiInput.value = resolveApiBase();
+    userIdInput.value = resolveUserId();
     startBtn.addEventListener("click", startMonitoring);
     stopBtn.addEventListener("click", stopMonitoring);
     window.addEventListener("resize", drawChart);

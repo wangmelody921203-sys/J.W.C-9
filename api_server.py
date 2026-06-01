@@ -40,7 +40,26 @@ _SESSION = None
 _DETECT_INIT_ERROR = ""
 _DETECT_RETRY_AT = 0.0
 _STRESS_OUTPUT_FILE = Path("emotion_output/latest_stress.json")
+_STRESS_USER_OUTPUT_DIR = Path("emotion_output/stress_users")
+_STRESS_USER_HISTORY_DIR = Path("emotion_output/stress_users_history")
 _STRESS_STALE_SECONDS = 5
+_STRESS_INGEST_TOKEN_ENV = "STRESS_INGEST_TOKEN"
+_STRESS_HISTORY_MAX_PER_USER = 3000
+
+
+def _normalize_stress_user_id(raw: object) -> str:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9._-]", "", value)[:120]
+
+
+def _stress_user_output_file(user_id: str) -> Path:
+    return _STRESS_USER_OUTPUT_DIR / f"{user_id}.json"
+
+
+def _stress_user_history_file(user_id: str) -> Path:
+    return _STRESS_USER_HISTORY_DIR / f"{user_id}.jsonl"
 
 
 def _default_stress_payload(source: str = "unavailable") -> dict:
@@ -54,6 +73,87 @@ def _default_stress_payload(source: str = "unavailable") -> dict:
         "stress_score": 0,
         "stress_level": "unknown",
     }
+
+
+def _normalize_stress_payload(payload: dict, fallback_source: str = "stress_ingest") -> dict:
+    if not isinstance(payload, dict):
+        return _default_stress_payload("invalid_payload")
+
+    ts = int(payload.get("timestamp") or time.time())
+    sensor_value = max(0, min(1023, int(payload.get("sensor_value") or 0)))
+    smoothed_value = float(payload.get("smoothed_value") or 0.0)
+    normalized = float(payload.get("normalized") or 0.0)
+    normalized = max(0.0, min(1.0, normalized))
+    stress_score = int(payload.get("stress_score") or round(normalized * 100))
+    stress_score = max(0, min(100, stress_score))
+
+    stress_level = str(payload.get("stress_level") or "unknown").strip().lower()
+    if stress_level not in {"low", "medium", "high", "unknown"}:
+        stress_level = "unknown"
+
+    return {
+        "source": str(payload.get("source") or fallback_source),
+        "timestamp": ts,
+        "is_stale": bool(payload.get("is_stale", False)),
+        "sensor_value": sensor_value,
+        "smoothed_value": smoothed_value,
+        "normalized": normalized,
+        "stress_score": stress_score,
+        "stress_level": stress_level,
+    }
+
+
+def _save_latest_stress(payload: dict) -> None:
+    normalized = _normalize_stress_payload(payload)
+    _STRESS_OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _STRESS_OUTPUT_FILE.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _save_latest_stress_for_user(user_id: str, payload: dict) -> None:
+    normalized_user_id = _normalize_stress_user_id(user_id)
+    if not normalized_user_id:
+        return
+    normalized = _normalize_stress_payload(payload)
+    _STRESS_USER_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _stress_user_output_file(normalized_user_id).write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _append_stress_history_for_user(user_id: str, payload: dict) -> None:
+    normalized_user_id = _normalize_stress_user_id(user_id)
+    if not normalized_user_id:
+        return
+
+    normalized = _normalize_stress_payload(payload)
+    _STRESS_USER_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    target = _stress_user_history_file(normalized_user_id)
+    with target.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(normalized, ensure_ascii=False) + "\n")
+
+    _trim_stress_history_for_user(normalized_user_id, _STRESS_HISTORY_MAX_PER_USER)
+
+
+def _trim_stress_history_for_user(user_id: str, keep_limit: int) -> None:
+    normalized_user_id = _normalize_stress_user_id(user_id)
+    if not normalized_user_id:
+        return
+
+    file_path = _stress_user_history_file(normalized_user_id)
+    if not file_path.exists():
+        return
+
+    try:
+        lines = file_path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return
+
+    if len(lines) <= keep_limit:
+        return
+
+    kept = lines[-keep_limit:]
+    file_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
 def _load_latest_stress(stale_seconds: int = _STRESS_STALE_SECONDS) -> dict:
@@ -72,16 +172,74 @@ def _load_latest_stress(stale_seconds: int = _STRESS_STALE_SECONDS) -> dict:
     now = int(time.time())
     is_stale = (now - ts) > max(1, int(stale_seconds)) if ts > 0 else True
 
-    return {
-        "source": str(payload.get("source") or "serial_fsr"),
-        "timestamp": ts,
-        "is_stale": bool(payload.get("is_stale", is_stale)) or is_stale,
-        "sensor_value": int(payload.get("sensor_value") or 0),
-        "smoothed_value": float(payload.get("smoothed_value") or 0.0),
-        "normalized": float(payload.get("normalized") or 0.0),
-        "stress_score": int(payload.get("stress_score") or 0),
-        "stress_level": str(payload.get("stress_level") or "unknown"),
-    }
+    normalized_payload = _normalize_stress_payload(payload, fallback_source="serial_fsr")
+    normalized_payload["is_stale"] = bool(normalized_payload.get("is_stale", False)) or is_stale
+    return normalized_payload
+
+
+def _load_latest_stress_for_user(user_id: str, stale_seconds: int = _STRESS_STALE_SECONDS) -> dict:
+    normalized_user_id = _normalize_stress_user_id(user_id)
+    if not normalized_user_id:
+        return _default_stress_payload("missing_user")
+
+    user_file = _stress_user_output_file(normalized_user_id)
+    if not user_file.exists():
+        return _default_stress_payload("missing")
+
+    try:
+        payload = json.loads(user_file.read_text(encoding="utf-8"))
+    except Exception:
+        return _default_stress_payload("invalid_json")
+
+    if not isinstance(payload, dict):
+        return _default_stress_payload("invalid_payload")
+
+    ts = int(payload.get("timestamp") or 0)
+    now = int(time.time())
+    is_stale = (now - ts) > max(1, int(stale_seconds)) if ts > 0 else True
+
+    normalized_payload = _normalize_stress_payload(payload, fallback_source="serial_fsr")
+    normalized_payload["is_stale"] = bool(normalized_payload.get("is_stale", False)) or is_stale
+    return normalized_payload
+
+
+def _load_stress_history_for_user(
+    user_id: str,
+    *,
+    limit: int,
+    since_ts: int | None = None,
+) -> list[dict]:
+    normalized_user_id = _normalize_stress_user_id(user_id)
+    if not normalized_user_id:
+        return []
+
+    user_file = _stress_user_history_file(normalized_user_id)
+    if not user_file.exists():
+        return []
+
+    rows: list[dict] = []
+    try:
+        with user_file.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                normalized = _normalize_stress_payload(payload, fallback_source="serial_fsr")
+                if since_ts is not None and int(normalized.get("timestamp") or 0) < since_ts:
+                    continue
+                rows.append(normalized)
+    except Exception:
+        return []
+
+    if limit > 0 and len(rows) > limit:
+        return rows[-limit:]
+    return rows
 
 
 def _ensure_detection_runtime() -> tuple[bool, str | None]:
@@ -1485,6 +1643,10 @@ def index():
             "endpoints": [
                 "/health",
                 "/detect",
+                "/stress/latest",
+                "/stress/user/latest",
+                "/stress/user/history",
+                "/stress/report",
                 "/generate",
                 "/feedback",
                 "/diary/sync",
@@ -3525,7 +3687,84 @@ def detect():
 
 @app.get("/stress/latest")
 def stress_latest():
+    requested_user_id = _normalize_stress_user_id(request.args.get("user_id", ""))
+    if requested_user_id:
+        return jsonify(_load_latest_stress_for_user(requested_user_id))
     return jsonify(_load_latest_stress())
+
+
+@app.get("/stress/user/latest")
+def stress_user_latest():
+    supabase_url, service_key = _get_supabase_config()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+
+    token = _extract_bearer_token()
+    if not token:
+        return jsonify({"error": "missing_bearer"}), 401
+
+    user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
+    if not user_id:
+        return jsonify({"error": "invalid_token"}), 401
+
+    return jsonify(_load_latest_stress_for_user(user_id))
+
+
+@app.get("/stress/user/history")
+def stress_user_history():
+    supabase_url, service_key = _get_supabase_config()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+
+    token = _extract_bearer_token()
+    if not token:
+        return jsonify({"error": "missing_bearer"}), 401
+
+    user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
+    if not user_id:
+        return jsonify({"error": "invalid_token"}), 401
+
+    try:
+        limit = max(1, min(2000, int(request.args.get("limit", 300))))
+    except (TypeError, ValueError):
+        limit = 300
+
+    since_ts: int | None
+    since_raw = request.args.get("since", "")
+    if str(since_raw).strip() == "":
+        since_ts = None
+    else:
+        try:
+            since_ts = max(0, int(since_raw))
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid_since"}), 400
+
+    entries = _load_stress_history_for_user(user_id, limit=limit, since_ts=since_ts)
+    return jsonify({
+        "ok": True,
+        "entries": entries,
+        "count": len(entries),
+        "limit": limit,
+        "since": since_ts,
+    })
+
+
+@app.post("/stress/report")
+def stress_report():
+    expected = os.environ.get(_STRESS_INGEST_TOKEN_ENV, "").strip()
+    provided = str(request.headers.get("X-Stress-Token", "")).strip()
+
+    if expected and provided != expected:
+        return jsonify({"error": "invalid_stress_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    normalized = _normalize_stress_payload(payload, fallback_source="stress_ingest")
+    _save_latest_stress(normalized)
+    report_user_id = _normalize_stress_user_id(payload.get("user_id", ""))
+    if report_user_id:
+        _save_latest_stress_for_user(report_user_id, normalized)
+        _append_stress_history_for_user(report_user_id, normalized)
+    return jsonify({"ok": True, "stress": normalized})
 
 
 # ──────────────────────────────────────────────

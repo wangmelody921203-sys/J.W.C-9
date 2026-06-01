@@ -1496,6 +1496,7 @@
     const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_j_OyZ2FEwbkcX99P26xZGA_abp1yqrQ";
     const SCAN_STORAGE_KEY = "emotionSense.latestScan";
     const MOOD_DIARY_KEY = "emotionSense.moodDiary.v1";
+    const AUTH_TOKEN_SHARE_KEY = "emotion.auth.access_token";
     const MOOD_DIARY_LIMIT = 120;
     const MUSIC_CLICK_STATS_KEY = "emotionSense.musicCategoryClicks.v1";
     const WINDOW_MS = 5000;
@@ -2837,6 +2838,16 @@
 
       const { data } = await supabaseClient.auth.getSession();
       currentSession = data.session;
+      try {
+        const token = String(currentSession?.access_token || "").trim();
+        if (token) {
+          localStorage.setItem(AUTH_TOKEN_SHARE_KEY, token);
+        } else {
+          localStorage.removeItem(AUTH_TOKEN_SHARE_KEY);
+        }
+      } catch (_err) {
+        // ignore localStorage errors
+      }
       if (currentSession?.user?.email) {
         setAuthState(`帳戶：${currentSession.user.email}`);
         fetchCloudDiaryEntries(false);
@@ -2850,6 +2861,16 @@
 
       supabaseClient.auth.onAuthStateChange((_event, session) => {
         currentSession = session;
+        try {
+          const token = String(currentSession?.access_token || "").trim();
+          if (token) {
+            localStorage.setItem(AUTH_TOKEN_SHARE_KEY, token);
+          } else {
+            localStorage.removeItem(AUTH_TOKEN_SHARE_KEY);
+          }
+        } catch (_err) {
+          // ignore localStorage errors
+        }
         if (currentSession?.user?.email) {
           setAuthState(`帳戶：${currentSession.user.email}`);
           syncMoodDiaryToCloud(false);
@@ -3142,6 +3163,11 @@
         return;
       }
       await supabaseClient.auth.signOut();
+      try {
+        localStorage.removeItem(AUTH_TOKEN_SHARE_KEY);
+      } catch (_err) {
+        // ignore localStorage errors
+      }
       currentSession = null;
       setAuthState("帳戶：未登入");
       updateAuthButtons();

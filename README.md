@@ -84,6 +84,52 @@ run_stress.bat COM4
 - `POST /detect` 回傳會包含 `stress`
 - `GET /stress/latest` 可直接讀目前壓力值
 
+### 讓所有使用者都看到同一組即時壓力（雲端共享模式）
+
+若要讓所有連到網站的使用者都看到壓力波動，請把感測器端資料上傳到雲端 API：
+
+1. 在雲端後端設定環境變數：`STRESS_INGEST_TOKEN=<你的強隨機字串>`
+2. 感測器連接的那台電腦執行橋接程式，加入上傳參數：
+
+```powershell
+& ".venv/Scripts/python.exe" stress_serial_bridge.py --port COM4 --baud 9600 --push-url https://your-render-service.onrender.com/stress/report --push-token <你的token>
+```
+
+3. 前端頁面（例如 `stress_live.html`）預設會讀目前網站同源的 `/stress/latest`
+
+### 每位使用者分開壓力資料（個人分流模式）
+
+若要每位使用者有自己的壓力曲線（不是全站共用同一條）：
+
+1. 感測器橋接程式上傳時帶入 `--user-id <該使用者的Supabase user id>`
+
+```powershell
+& ".venv/Scripts/python.exe" stress_serial_bridge.py --port COM4 --baud 9600 --push-url https://your-render-service.onrender.com/stress/report --push-token <你的token> --user-id <supabase_user_id>
+```
+
+2. 前端 `stress_live.html`：
+- 已登入 `scan.html` 後，會自動讀共享的 access token，並使用 `/stress/user/latest` 抓「自己的資料」
+- 未登入時可在頁面輸入 `user_id`，會走 `/stress/latest?user_id=...`
+
+新增 API：
+
+- `POST /stress/report`：感測器端上傳壓力值（header: `X-Stress-Token`）
+- `GET /stress/latest`：所有使用者讀取最新壓力快照
+- `GET /stress/user/latest`：登入者讀取自己的最新壓力快照（需 Bearer token）
+- `GET /stress/user/history`：登入者讀取自己的壓力歷史（需 Bearer token）
+
+`/stress/user/history` 查詢參數：
+
+- `limit`：回傳筆數上限（1~2000，預設 300）
+- `since`：僅回傳 timestamp >= since 的資料（Unix 秒）
+
+範例：
+
+```http
+GET /stress/user/history?limit=240&since=1717000000
+Authorization: Bearer <access_token>
+```
+
 `stress` 欄位主要內容：
 
 - `sensor_value`：原始值（0~1023）

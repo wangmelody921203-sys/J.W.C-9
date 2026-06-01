@@ -5,6 +5,8 @@ import json
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 try:
@@ -36,6 +38,21 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.35,
         help="EMA smoothing factor for sensor value (0.0~1.0)",
+    )
+    parser.add_argument(
+        "--push-url",
+        default="",
+        help="Optional cloud endpoint URL to push stress payloads, e.g. https://<host>/stress/report",
+    )
+    parser.add_argument(
+        "--push-token",
+        default="",
+        help="Optional token sent in X-Stress-Token header when --push-url is used",
+    )
+    parser.add_argument(
+        "--user-id",
+        default="",
+        help="Optional user_id to tag payload for per-user stress stream",
     )
     return parser.parse_args()
 
@@ -96,12 +113,36 @@ def write_stale(path: Path, stale_seconds: int) -> None:
     write_json(path, payload)
 
 
+def push_payload(push_url: str, payload: dict, push_token: str = "") -> bool:
+    if not push_url:
+        return False
+
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if push_token:
+        headers["X-Stress-Token"] = push_token
+
+    req = urllib.request.Request(push_url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=4) as response:
+            return 200 <= response.status < 300
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return False
+
+
 def run_loop(args: argparse.Namespace) -> int:
     alpha = float(max(0.0, min(1.0, args.alpha)))
     smoothed: float | None = None
     last_sample_at = 0.0
+    push_url = str(args.push_url or "").strip()
+    push_token = str(args.push_token or "").strip()
+    user_id = str(args.user_id or "").strip()
 
     print(f"Opening serial port {args.port} @ {args.baud}...")
+    if push_url:
+        print(f"Cloud push enabled: {push_url}")
+    if user_id:
+        print(f"Per-user mode enabled for user_id: {user_id}")
     try:
         with serial.Serial(args.port, args.baud, timeout=1) as ser:
             time.sleep(1.5)
@@ -123,9 +164,13 @@ def run_loop(args: argparse.Namespace) -> int:
 
                 last_sample_at = now
                 payload = to_payload(value, smoothed, args.stale_seconds)
+                if user_id:
+                    payload["user_id"] = user_id
                 write_json(args.output, payload)
+                pushed = push_payload(push_url, payload, push_token) if push_url else False
+                push_text = " pushed=ok" if pushed else (" pushed=fail" if push_url else "")
                 print(
-                    f"raw={payload['sensor_value']:4d} score={payload['stress_score']:3d} level={payload['stress_level']}"
+                    f"raw={payload['sensor_value']:4d} score={payload['stress_score']:3d} level={payload['stress_level']}{push_text}"
                 )
     except KeyboardInterrupt:
         print("\nStopped by user.")
