@@ -1210,6 +1210,40 @@
     }
     .pet-input:focus { border-color: rgba(50, 217, 124, 0.4); }
     .pet-input::placeholder { color: var(--muted); }
+    .pet-voice {
+      flex-shrink: 0;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+      align-self: flex-end;
+    }
+    .pet-voice:hover {
+      border-color: rgba(255, 255, 255, 0.34);
+      background: rgba(255, 255, 255, 0.11);
+    }
+    .pet-voice.recording {
+      border-color: rgba(255, 111, 111, 0.62);
+      background: rgba(255, 111, 111, 0.2);
+      color: #ffd6d6;
+      animation: pet-voice-pulse 1.05s ease-in-out infinite;
+    }
+    .pet-voice:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    @keyframes pet-voice-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255, 111, 111, 0.3); }
+      50% { box-shadow: 0 0 0 8px rgba(255, 111, 111, 0.02); }
+    }
     .pet-send {
       flex-shrink: 0;
       width: 38px;
@@ -1483,6 +1517,7 @@
     <div class="pet-input-row">
       <textarea id="pet-input" class="pet-input" rows="1"
         placeholder="說點什麼…（Enter 送出）" maxlength="500"></textarea>
+      <button id="pet-voice" class="pet-voice" type="button" aria-label="語音輸入" title="語音輸入">🎤</button>
       <button id="pet-send" class="pet-send" aria-label="送出">↑</button>
     </div>
   </div>
@@ -3270,6 +3305,7 @@
     const petMemoryHistoryList = document.getElementById("pet-memory-history-list");
     const petMessages = document.getElementById("pet-messages");
     const petInput    = document.getElementById("pet-input");
+    const petVoiceBtn = document.getElementById("pet-voice");
     const petSendBtn  = document.getElementById("pet-send");
 
     // 當次情緒上下文，掃描完成後由主流程更新
@@ -3293,6 +3329,11 @@
     let petMemorySearchTimer = null;
     let petMemoryHistoryOpen = false;
     let petMemoryGovernanceEvents = [];
+    let petSpeechRecognition = null;
+    let petSpeechListening = false;
+    let petSpeechManualStop = false;
+    let petSpeechFinalText = "";
+    const PET_SPEECH_RECOGNITION = window.SpeechRecognition || window.webkitSpeechRecognition || null;
     let petMemoryFilters = {
       kind: "all",
       status: "all",
@@ -4554,6 +4595,7 @@
     }
 
     function petClose_() {
+      petStopSpeechInput(true);
       petPanel.classList.remove("open");
     }
 
@@ -4578,6 +4620,139 @@
       petMessages.appendChild(div);
       petMessages.scrollTop = petMessages.scrollHeight;
       return div;
+    }
+
+    function petResizeInputForContent() {
+      petInput.style.height = "auto";
+      petInput.style.height = Math.min(petInput.scrollHeight, 120) + "px";
+    }
+
+    function petUpdateVoiceButtonState() {
+      if (!petVoiceBtn) {
+        return;
+      }
+      const unsupported = !PET_SPEECH_RECOGNITION;
+      petVoiceBtn.classList.toggle("recording", petSpeechListening);
+      petVoiceBtn.disabled = unsupported || (petWaiting && !petSpeechListening);
+
+      if (unsupported) {
+        petVoiceBtn.textContent = "×";
+        petVoiceBtn.title = "此瀏覽器不支援語音輸入";
+        petVoiceBtn.setAttribute("aria-label", "此瀏覽器不支援語音輸入");
+        return;
+      }
+
+      if (petSpeechListening) {
+        petVoiceBtn.textContent = "■";
+        petVoiceBtn.title = "停止語音輸入";
+        petVoiceBtn.setAttribute("aria-label", "停止語音輸入");
+      } else {
+        petVoiceBtn.textContent = "🎤";
+        petVoiceBtn.title = "語音輸入";
+        petVoiceBtn.setAttribute("aria-label", "語音輸入");
+      }
+    }
+
+    function petStopSpeechInput(manual = false) {
+      if (!petSpeechRecognition || !petSpeechListening) {
+        return;
+      }
+      petSpeechManualStop = manual;
+      try {
+        petSpeechRecognition.stop();
+      } catch (_) {
+        // ignore stop errors
+      }
+    }
+
+    function petBuildSpeechError(errorCode) {
+      const code = String(errorCode || "").toLowerCase();
+      if (code === "not-allowed" || code === "service-not-allowed") {
+        return "語音權限未開啟，請允許麥克風後再試一次。";
+      }
+      if (code === "audio-capture") {
+        return "找不到可用麥克風，請確認裝置已連接。";
+      }
+      if (code === "no-speech") {
+        return "沒有聽到語音，請靠近麥克風後再試。";
+      }
+      if (code === "network") {
+        return "語音辨識網路異常，請稍後再試。";
+      }
+      return "語音輸入暫時失敗，請再試一次。";
+    }
+
+    function petStartSpeechInput() {
+      if (!PET_SPEECH_RECOGNITION) {
+        petAppend("pet", "你的瀏覽器目前不支援語音輸入，建議改用 Chrome / Edge 最新版。", "crisis-note");
+        petUpdateVoiceButtonState();
+        return;
+      }
+      if (petWaiting) {
+        return;
+      }
+      if (petSpeechListening) {
+        petStopSpeechInput(true);
+        return;
+      }
+
+      if (!petSpeechRecognition) {
+        petSpeechRecognition = new PET_SPEECH_RECOGNITION();
+        petSpeechRecognition.lang = "zh-TW";
+        petSpeechRecognition.continuous = false;
+        petSpeechRecognition.interimResults = true;
+        petSpeechRecognition.maxAlternatives = 1;
+
+        petSpeechRecognition.onstart = () => {
+          petSpeechListening = true;
+          petSpeechManualStop = false;
+          petSpeechFinalText = "";
+          petUpdateVoiceButtonState();
+        };
+
+        petSpeechRecognition.onresult = (event) => {
+          let interim = "";
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const row = event.results[i];
+            const transcript = String(row?.[0]?.transcript || "").trim();
+            if (!transcript) {
+              continue;
+            }
+            if (row.isFinal) {
+              petSpeechFinalText = `${petSpeechFinalText} ${transcript}`.trim();
+            } else {
+              interim = `${interim} ${transcript}`.trim();
+            }
+          }
+          const merged = `${petSpeechFinalText} ${interim}`.trim();
+          if (merged) {
+            petInput.value = merged;
+            petResizeInputForContent();
+          }
+        };
+
+        petSpeechRecognition.onerror = (event) => {
+          const message = petBuildSpeechError(event?.error);
+          if (!petSpeechManualStop) {
+            petAppend("pet", message, "crisis-note");
+          }
+        };
+
+        petSpeechRecognition.onend = () => {
+          petSpeechListening = false;
+          petSpeechManualStop = false;
+          petSpeechFinalText = "";
+          petUpdateVoiceButtonState();
+          petInput.focus();
+        };
+      }
+
+      try {
+        petSpeechRecognition.start();
+      } catch (_) {
+        petAppend("pet", "語音輸入初始化失敗，請重新嘗試。", "crisis-note");
+      }
+      petUpdateVoiceButtonState();
     }
 
     function petBuildCrisisModeNotice(level, phase = "guide") {
@@ -4677,6 +4852,7 @@
 
       petWaiting = true;
       petSendBtn.disabled = true;
+      petUpdateVoiceButtonState();
       const loadingBubble = petAppend("loading", "陰晴正在思考…");
 
       let reply = petBuildFallback(petCurrentEmotion);
@@ -4746,6 +4922,7 @@
       } finally {
         petWaiting = false;
         petSendBtn.disabled = false;
+        petUpdateVoiceButtonState();
         petInput.focus();
       }
       return true;
@@ -4765,6 +4942,12 @@
       void petTrySendFromInput();
     });
 
+    if (petVoiceBtn) {
+      petVoiceBtn.addEventListener("click", () => {
+        petStartSpeechInput();
+      });
+    }
+
     petInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -4774,9 +4957,10 @@
 
     // 自動撐高 textarea
     petInput.addEventListener("input", () => {
-      petInput.style.height = "auto";
-      petInput.style.height = Math.min(petInput.scrollHeight, 120) + "px";
+      petResizeInputForContent();
     });
+
+    petUpdateVoiceButtonState();
 
     petSessionSelect.addEventListener("change", async () => {
       const nextId = String(petSessionSelect.value || "").trim();

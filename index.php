@@ -217,6 +217,27 @@ $queries = $emotionQueries[$emotion] ?? $emotionQueries['unknown'];
       color: #23314f;
       white-space: pre-wrap;
     }
+    .noise-controls {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .noise-player {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    .noise-status {
+      width: 100%;
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 2px;
+    }
   </style>
 </head>
 <body>
@@ -235,6 +256,11 @@ $queries = $emotionQueries[$emotion] ?? $emotionQueries['unknown'];
       </div>
       <div class="seed-list">推薦音樂類型：<?= h(implode(' | ', $queries)) ?></div>
       <div class="small" style="margin-top:8px;">按下按鈕後，會顯示攝影機預覽並監測 5 秒，完成後自動關閉並把結果回傳到此頁。</div>
+      <div class="noise-controls">
+        <button id="noise-toggle" class="btn" type="button">白噪音開啟</button>
+        <button id="noise-play-once" class="btn" type="button">重新播放白噪音</button>
+        <div id="noise-status" class="noise-status">正在讀取白噪音設定...</div>
+      </div>
       <?php if (is_array($captureStatus)): ?>
         <div class="notice">
           <?= $captureStatus['ok'] ? '偵測完成，已更新推薦。' : '偵測失敗，請檢查攝影機/環境。' ?>
@@ -275,6 +301,11 @@ $queries = $emotionQueries[$emotion] ?? $emotionQueries['unknown'];
       </div>
     </section>
   </div>
+
+  <video id="white-noise" class="noise-player" loop preload="auto" playsinline>
+    <source src="./white-noise.mp4" type="video/mp4">
+    <source src="./white-noise.mp3" type="audio/mpeg">
+  </video>
 </body>
 <script>
 const startBtn = document.getElementById('start-camera');
@@ -388,6 +419,93 @@ stopBtn.addEventListener('click', () => {
   stopBtn.style.display = 'none';
   statusDiv.textContent = '';
 });
+
+const NOISE_STORAGE_KEY = 'emotionSense.whiteNoiseMuted';
+const noiseAudioEl = document.getElementById('white-noise');
+const noiseToggleBtn = document.getElementById('noise-toggle');
+const noisePlayOnceBtn = document.getElementById('noise-play-once');
+const noiseStatusEl = document.getElementById('noise-status');
+let noiseAudioReady = true;
+
+function noiseMutedPreferred() {
+  return localStorage.getItem(NOISE_STORAGE_KEY) === 'true';
+}
+
+function persistNoisePreference(muted) {
+  localStorage.setItem(NOISE_STORAGE_KEY, muted ? 'true' : 'false');
+}
+
+function syncNoiseUi() {
+  if (!noiseToggleBtn || !noiseStatusEl || !noiseAudioEl) {
+    return;
+  }
+
+  const muted = noiseMutedPreferred();
+  noiseToggleBtn.textContent = muted ? '白噪音關閉' : '白噪音開啟';
+
+  if (!noiseAudioReady) {
+      noiseStatusEl.textContent = '找不到白噪音檔案；請把 white-noise.mp4 或 white-noise.mp3 放到專案根目錄。';
+  }
+
+  noiseStatusEl.textContent = muted
+    ? '你目前選擇關閉白噪音。'
+    : '白噪音偏好已開啟；若瀏覽器允許，會自動播放。';
+}
+
+async function tryPlayNoise() {
+  if (!noiseAudioEl || !noiseStatusEl) {
+    return;
+  }
+
+  if (noiseAudioEl.error) {
+    noiseAudioReady = false;
+    syncNoiseUi();
+    return;
+  }
+
+  if (noiseMutedPreferred()) {
+    noiseAudioEl.pause();
+    return;
+  }
+
+  try {
+    noiseAudioEl.volume = 0.35;
+    await noiseAudioEl.play();
+    noiseStatusEl.textContent = '白噪音播放中。';
+  } catch (_) {
+    noiseStatusEl.textContent = '瀏覽器阻擋自動播放，按一下「重新播放白噪音」即可開始。';
+  }
+}
+
+if (noiseToggleBtn && noisePlayOnceBtn && noiseAudioEl) {
+  noiseToggleBtn.addEventListener('click', async () => {
+    const nextMuted = !noiseMutedPreferred();
+    persistNoisePreference(nextMuted);
+    syncNoiseUi();
+    if (nextMuted) {
+      noiseAudioEl.pause();
+    } else {
+      await tryPlayNoise();
+    }
+  });
+
+  noisePlayOnceBtn.addEventListener('click', async () => {
+    persistNoisePreference(false);
+    syncNoiseUi();
+    await tryPlayNoise();
+  });
+
+  noiseAudioEl.addEventListener('error', () => {
+    noiseAudioReady = false;
+    syncNoiseUi();
+  });
+
+  if (noiseAudioEl.error) {
+    noiseAudioReady = false;
+  }
+  syncNoiseUi();
+  tryPlayNoise();
+}
 </script>
 <?php if ($fromCapture): ?>
 <script>
