@@ -1240,6 +1240,35 @@
       opacity: 0.45;
       cursor: default;
     }
+    .pet-tts {
+      flex-shrink: 0;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+      align-self: flex-end;
+    }
+    .pet-tts:hover {
+      border-color: rgba(255, 255, 255, 0.34);
+      background: rgba(255, 255, 255, 0.11);
+    }
+    .pet-tts.on {
+      border-color: rgba(80, 204, 255, 0.46);
+      background: rgba(80, 204, 255, 0.16);
+      color: #d8f4ff;
+    }
+    .pet-tts:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
     @keyframes pet-voice-pulse {
       0%, 100% { box-shadow: 0 0 0 0 rgba(255, 111, 111, 0.3); }
       50% { box-shadow: 0 0 0 8px rgba(255, 111, 111, 0.02); }
@@ -1517,6 +1546,7 @@
     <div class="pet-input-row">
       <textarea id="pet-input" class="pet-input" rows="1"
         placeholder="說點什麼…（Enter 送出）" maxlength="500"></textarea>
+      <button id="pet-tts" class="pet-tts" type="button" aria-label="語音播報開關" title="語音播報開關">🔊</button>
       <button id="pet-voice" class="pet-voice" type="button" aria-label="語音輸入" title="語音輸入">🎤</button>
       <button id="pet-send" class="pet-send" aria-label="送出">↑</button>
     </div>
@@ -3305,6 +3335,7 @@
     const petMemoryHistoryList = document.getElementById("pet-memory-history-list");
     const petMessages = document.getElementById("pet-messages");
     const petInput    = document.getElementById("pet-input");
+    const petTtsBtn   = document.getElementById("pet-tts");
     const petVoiceBtn = document.getElementById("pet-voice");
     const petSendBtn  = document.getElementById("pet-send");
 
@@ -3329,10 +3360,14 @@
     let petMemorySearchTimer = null;
     let petMemoryHistoryOpen = false;
     let petMemoryGovernanceEvents = [];
+    let petTtsEnabled = true;
+    let petTtsVoice = null;
     let petSpeechRecognition = null;
     let petSpeechListening = false;
     let petSpeechManualStop = false;
     let petSpeechFinalText = "";
+    const PET_TTS_ENABLED_KEY = "emotionSense.petTtsEnabled.v1";
+    const PET_SPEECH_SYNTHESIS = window.speechSynthesis || null;
     const PET_SPEECH_RECOGNITION = window.SpeechRecognition || window.webkitSpeechRecognition || null;
     let petMemoryFilters = {
       kind: "all",
@@ -4595,6 +4630,7 @@
     }
 
     function petClose_() {
+      petStopSpeechOutput();
       petStopSpeechInput(true);
       petPanel.classList.remove("open");
     }
@@ -4625,6 +4661,110 @@
     function petResizeInputForContent() {
       petInput.style.height = "auto";
       petInput.style.height = Math.min(petInput.scrollHeight, 120) + "px";
+    }
+
+    function petLoadTtsSetting() {
+      try {
+        const raw = localStorage.getItem(PET_TTS_ENABLED_KEY);
+        if (raw === "0") {
+          petTtsEnabled = false;
+          return;
+        }
+      } catch (_) {
+        // ignore localStorage errors
+      }
+      petTtsEnabled = true;
+    }
+
+    function petPersistTtsSetting() {
+      try {
+        localStorage.setItem(PET_TTS_ENABLED_KEY, petTtsEnabled ? "1" : "0");
+      } catch (_) {
+        // ignore localStorage errors
+      }
+    }
+
+    function petPickTtsVoice() {
+      if (!PET_SPEECH_SYNTHESIS) {
+        petTtsVoice = null;
+        return;
+      }
+      const voices = PET_SPEECH_SYNTHESIS.getVoices();
+      if (!Array.isArray(voices) || !voices.length) {
+        petTtsVoice = null;
+        return;
+      }
+      petTtsVoice = voices.find((v) => /^zh-TW$/i.test(v.lang))
+        || voices.find((v) => /^zh-HK$/i.test(v.lang))
+        || voices.find((v) => /^zh-CN$/i.test(v.lang))
+        || voices.find((v) => /^zh/i.test(v.lang))
+        || voices[0]
+        || null;
+    }
+
+    function petStopSpeechOutput() {
+      if (!PET_SPEECH_SYNTHESIS) {
+        return;
+      }
+      PET_SPEECH_SYNTHESIS.cancel();
+    }
+
+    function petUpdateTtsButtonState() {
+      if (!petTtsBtn) {
+        return;
+      }
+      const unsupported = !PET_SPEECH_SYNTHESIS;
+      petTtsBtn.classList.toggle("on", !unsupported && petTtsEnabled);
+      petTtsBtn.disabled = unsupported;
+
+      if (unsupported) {
+        petTtsBtn.textContent = "×";
+        petTtsBtn.title = "此瀏覽器不支援語音播報";
+        petTtsBtn.setAttribute("aria-label", "此瀏覽器不支援語音播報");
+        return;
+      }
+
+      petTtsBtn.textContent = petTtsEnabled ? "🔊" : "🔇";
+      petTtsBtn.title = petTtsEnabled ? "關閉語音播報" : "開啟語音播報";
+      petTtsBtn.setAttribute("aria-label", petTtsEnabled ? "關閉語音播報" : "開啟語音播報");
+    }
+
+    function petToggleTtsEnabled() {
+      if (!PET_SPEECH_SYNTHESIS) {
+        petUpdateTtsButtonState();
+        return;
+      }
+      petTtsEnabled = !petTtsEnabled;
+      petPersistTtsSetting();
+      if (!petTtsEnabled) {
+        petStopSpeechOutput();
+      }
+      petUpdateTtsButtonState();
+    }
+
+    function petSpeakText(text) {
+      if (!PET_SPEECH_SYNTHESIS || !petTtsEnabled) {
+        return;
+      }
+      const normalized = String(text || "").replace(/\s+/g, " ").trim();
+      if (!normalized) {
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(normalized.slice(0, 320));
+      utterance.lang = "zh-TW";
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      if (!petTtsVoice) {
+        petPickTtsVoice();
+      }
+      if (petTtsVoice) {
+        utterance.voice = petTtsVoice;
+      }
+
+      PET_SPEECH_SYNTHESIS.cancel();
+      PET_SPEECH_SYNTHESIS.speak(utterance);
     }
 
     function petUpdateVoiceButtonState() {
@@ -4688,6 +4828,7 @@
         petUpdateVoiceButtonState();
         return;
       }
+      petStopSpeechOutput();
       if (petWaiting) {
         return;
       }
@@ -4907,6 +5048,7 @@
         } else {
           petAppend("pet", reply);
         }
+        petSpeakText(reply);
         petLastSafetyMode = isCrisisMode ? "crisis" : "normal";
         petLastCrisisPhase = isCrisisMode ? crisisPhase : "";
         petHistory.push({ role: "assistant", content: reply });
@@ -4942,6 +5084,12 @@
       void petTrySendFromInput();
     });
 
+    if (petTtsBtn) {
+      petTtsBtn.addEventListener("click", () => {
+        petToggleTtsEnabled();
+      });
+    }
+
     if (petVoiceBtn) {
       petVoiceBtn.addEventListener("click", () => {
         petStartSpeechInput();
@@ -4960,6 +5108,14 @@
       petResizeInputForContent();
     });
 
+    petLoadTtsSetting();
+    petPickTtsVoice();
+    if (PET_SPEECH_SYNTHESIS && typeof PET_SPEECH_SYNTHESIS.onvoiceschanged !== "undefined") {
+      PET_SPEECH_SYNTHESIS.onvoiceschanged = () => {
+        petPickTtsVoice();
+      };
+    }
+    petUpdateTtsButtonState();
     petUpdateVoiceButtonState();
 
     petSessionSelect.addEventListener("change", async () => {
