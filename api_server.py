@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import concurrent.futures
+import html
 import json
 import os
 import re
@@ -365,28 +366,94 @@ def _tts_profile(emotion: str, is_crisis_mode: bool) -> dict:
             "rate": "-12%",
             "pitch": "-2Hz",
             "volume": "+0%",
+            "style": "calm",
         }
 
     by_emotion = {
-        "happiness": {"voice": "zh-TW-HsiaoChenNeural", "rate": "+3%", "pitch": "+2Hz", "volume": "+0%"},
-        "sadness": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-8%", "pitch": "-2Hz", "volume": "+0%"},
-        "anger": {"voice": "zh-TW-YunJheNeural", "rate": "-6%", "pitch": "-3Hz", "volume": "+0%"},
-        "fear": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-9%", "pitch": "-1Hz", "volume": "+0%"},
-        "disgust": {"voice": "zh-TW-YunJheNeural", "rate": "-7%", "pitch": "-2Hz", "volume": "+0%"},
-        "contempt": {"voice": "zh-TW-YunJheNeural", "rate": "-4%", "pitch": "-2Hz", "volume": "+0%"},
-        "uncertain": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-2%", "pitch": "+0Hz", "volume": "+0%"},
-        "unknown": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-1%", "pitch": "+0Hz", "volume": "+0%"},
+        "happiness": {"voice": "zh-TW-HsiaoChenNeural", "rate": "+3%", "pitch": "+2Hz", "volume": "+0%", "style": "cheerful"},
+        "sadness": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-8%", "pitch": "-2Hz", "volume": "+0%", "style": "sad"},
+        "anger": {"voice": "zh-TW-YunJheNeural", "rate": "-6%", "pitch": "-3Hz", "volume": "+0%", "style": "calm"},
+        "fear": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-9%", "pitch": "-1Hz", "volume": "+0%", "style": "calm"},
+        "disgust": {"voice": "zh-TW-YunJheNeural", "rate": "-7%", "pitch": "-2Hz", "volume": "+0%", "style": "calm"},
+        "contempt": {"voice": "zh-TW-YunJheNeural", "rate": "-4%", "pitch": "-2Hz", "volume": "+0%", "style": "calm"},
+        "uncertain": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-2%", "pitch": "+0Hz", "volume": "+0%", "style": "calm"},
+        "unknown": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-1%", "pitch": "+0Hz", "volume": "+0%", "style": "general"},
     }
     return by_emotion.get(emotion, by_emotion["unknown"])
 
 
-def _synthesize_tts_audio(text: str, emotion: str, is_crisis_mode: bool) -> tuple[bytes | None, str | None]:
+def _azure_tts_config() -> tuple[str | None, str | None, str | None, str]:
+    key = str(os.environ.get("AZURE_SPEECH_KEY", "")).strip()
+    region = str(os.environ.get("AZURE_SPEECH_REGION", "")).strip()
+    voice_override = str(os.environ.get("AZURE_SPEECH_VOICE", "")).strip() or None
+    output_format = str(
+        os.environ.get("AZURE_SPEECH_OUTPUT_FORMAT", "audio-24khz-48kbitrate-mono-mp3")
+    ).strip() or "audio-24khz-48kbitrate-mono-mp3"
+    if not key or not region:
+        return None, None, voice_override, output_format
+    return key, region, voice_override, output_format
+
+
+def _build_azure_ssml(text: str, profile: dict, voice_override: str | None = None) -> str:
+    escaped = html.escape(text, quote=False)
+    voice = str(voice_override or profile.get("voice") or "zh-TW-HsiaoChenNeural")
+    rate = str(profile.get("rate") or "+0%")
+    pitch = str(profile.get("pitch") or "+0Hz")
+    volume = str(profile.get("volume") or "+0%")
+    style = str(profile.get("style") or "general").strip()
+
+    prosody_body = f'<prosody rate="{rate}" pitch="{pitch}" volume="{volume}">{escaped}</prosody>'
+    if style and style != "general":
+        body = f'<mstts:express-as style="{style}">{prosody_body}</mstts:express-as>'
+    else:
+        body = prosody_body
+
+    return (
+        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+        'xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="zh-TW">'
+        f'<voice name="{voice}">{body}</voice>'
+        '</speak>'
+    )
+
+
+def _synthesize_tts_via_azure(text: str, profile: dict) -> tuple[bytes | None, str | None]:
+    key, region, voice_override, output_format = _azure_tts_config()
+    if not key or not region:
+        return None, "azure_tts_not_configured"
+
+    ssml = _build_azure_ssml(text, profile, voice_override)
+    endpoint = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    req = urllib.request.Request(
+        endpoint,
+        data=ssml.encode("utf-8"),
+        headers={
+            "Ocp-Apim-Subscription-Key": key,
+            "Content-Type": "application/ssml+xml",
+            "X-Microsoft-OutputFormat": output_format,
+            "User-Agent": "emotion-sense-tts/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            if resp.status != 200:
+                return None, f"azure_tts_http_{resp.status}"
+            audio = resp.read()
+            if not audio:
+                return None, "azure_tts_empty_audio"
+            return audio, None
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+        return None, f"azure_tts_http_{exc.code}:{detail[:220]}"
+    except Exception as exc:
+        return None, f"azure_tts_failed:{exc}"
+
+
+def _synthesize_tts_via_edge(text: str, profile: dict) -> tuple[bytes | None, str | None]:
     try:
         import edge_tts
     except Exception:
         return None, "edge_tts_not_installed"
-
-    profile = _tts_profile(emotion, is_crisis_mode)
 
     async def _run() -> bytes:
         communicate = edge_tts.Communicate(
@@ -416,6 +483,22 @@ def _synthesize_tts_audio(text: str, emotion: str, is_crisis_mode: bool) -> tupl
     if not data:
         return None, "tts_empty_audio"
     return data, None
+
+
+def _synthesize_tts_audio(text: str, emotion: str, is_crisis_mode: bool) -> tuple[bytes | None, str | None]:
+    profile = _tts_profile(emotion, is_crisis_mode)
+
+    azure_audio, azure_error = _synthesize_tts_via_azure(text, profile)
+    if azure_audio:
+        return azure_audio, None
+
+    edge_audio, edge_error = _synthesize_tts_via_edge(text, profile)
+    if edge_audio:
+        return edge_audio, None
+
+    if azure_error and edge_error:
+        return None, f"{azure_error};{edge_error}"
+    return None, azure_error or edge_error or "tts_failed"
 
 
 def _build_fallback_reply(emotion: str, persona: str) -> str:
