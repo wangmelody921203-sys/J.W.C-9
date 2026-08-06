@@ -3362,6 +3362,8 @@
     let petMemoryGovernanceEvents = [];
     let petTtsEnabled = true;
     let petTtsVoice = null;
+    let petTtsLastNoticeAt = 0;
+    let petTtsQueueToken = 0;
     let petSpeechRecognition = null;
     let petSpeechListening = false;
     let petSpeechManualStop = false;
@@ -4706,7 +4708,28 @@
       if (!PET_SPEECH_SYNTHESIS) {
         return;
       }
+      petTtsQueueToken += 1;
       PET_SPEECH_SYNTHESIS.cancel();
+    }
+
+    function petNotifyTtsIssue(message) {
+      const now = Date.now();
+      if (now - petTtsLastNoticeAt < 12000) {
+        return;
+      }
+      petTtsLastNoticeAt = now;
+      petAppend("pet", message, "crisis-note");
+    }
+
+    function petResumeSpeechOutput() {
+      if (!PET_SPEECH_SYNTHESIS) {
+        return;
+      }
+      try {
+        PET_SPEECH_SYNTHESIS.resume();
+      } catch (_) {
+        // ignore resume errors
+      }
     }
 
     function petUpdateTtsButtonState() {
@@ -4738,33 +4761,159 @@
       petPersistTtsSetting();
       if (!petTtsEnabled) {
         petStopSpeechOutput();
+      } else {
+        petResumeSpeechOutput();
       }
       petUpdateTtsButtonState();
     }
 
-    function petSpeakText(text) {
-      if (!PET_SPEECH_SYNTHESIS || !petTtsEnabled) {
+    function petSanitizeTextForTts(text) {
+      return String(text || "")
+        .replace(/https?:\/\/\S+/gi, "這裡有一個連結")
+        .replace(/`[^`]*`/g, "")
+        .replace(/\*\*|__|~~|[#>*_\[\]()]/g, " ")
+        .replace(/\r?\n+/g, "。")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function petSplitTtsChunks(text) {
+      const source = String(text || "").trim();
+      if (!source) {
+        return [];
+      }
+      const base = source.match(/[^。！？；:：\n]+[。！？；:：]?/g) || [source];
+      const chunks = [];
+
+      base.forEach((piece) => {
+        const row = String(piece || "").trim();
+        if (!row) {
+          return;
+        }
+        if (row.length <= 34) {
+          chunks.push(row);
+          return;
+        }
+        const subParts = row.match(/[^，、,]+[，、,]?/g) || [row];
+        subParts.forEach((part) => {
+          const sub = String(part || "").trim();
+          if (!sub) {
+            return;
+          }
+          if (sub.length <= 34) {
+            chunks.push(sub);
+            return;
+          }
+          for (let i = 0; i < sub.length; i += 30) {
+            chunks.push(sub.slice(i, i + 30));
+          }
+        });
+      });
+
+      return chunks.slice(0, 10);
+    }
+
+    function petGetTtsProsody(emotion, isCrisisMode) {
+      const key = String(emotion || "unknown").toLowerCase();
+      if (isCrisisMode) {
+        return { rate: 0.9, pitch: 0.95, volume: 1 };
+      }
+      const byEmotion = {
+        happiness: { rate: 1.03, pitch: 1.08, volume: 1 },
+        sadness: { rate: 0.92, pitch: 0.94, volume: 1 },
+        anger: { rate: 0.95, pitch: 0.92, volume: 1 },
+        fear: { rate: 0.91, pitch: 0.97, volume: 1 },
+        disgust: { rate: 0.94, pitch: 0.93, volume: 1 },
+        contempt: { rate: 0.96, pitch: 0.95, volume: 1 },
+        uncertain: { rate: 0.97, pitch: 1.0, volume: 1 },
+        unknown: { rate: 0.98, pitch: 1.0, volume: 1 },
+      };
+      return byEmotion[key] || byEmotion.unknown;
+    }
+
+    function petGetChunkPauseMs(chunk) {
+      const end = String(chunk || "").trim().slice(-1);
+      if (["。", "！", "？", ".", "!", "?"].includes(end)) {
+        return 320;
+      }
+      if (["，", "、", ",", ";", "；", ":", "："].includes(end)) {
+        return 180;
+      }
+      return 120;
+    }
+
+    function petSpeakChunks(chunks, prosody, token, index = 0) {
+      if (!PET_SPEECH_SYNTHESIS || token !== petTtsQueueToken) {
         return;
       }
-      const normalized = String(text || "").replace(/\s+/g, " ").trim();
-      if (!normalized) {
+      if (index >= chunks.length) {
         return;
       }
 
-      const utterance = new SpeechSynthesisUtterance(normalized.slice(0, 320));
-      utterance.lang = "zh-TW";
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-      if (!petTtsVoice) {
-        petPickTtsVoice();
+      const chunk = String(chunks[index] || "").trim();
+      if (!chunk) {
+        petSpeakChunks(chunks, prosody, token, index + 1);
+        return;
       }
+
+      const utterance = new SpeechSynthesisUtterance(chunk);
+      utterance.lang = "zh-TW";
+      utterance.rate = prosody.rate;
+      utterance.pitch = prosody.pitch;
+      utterance.volume = prosody.volume;
       if (petTtsVoice) {
         utterance.voice = petTtsVoice;
       }
 
-      PET_SPEECH_SYNTHESIS.cancel();
+      utterance.onerror = () => {
+        petNotifyTtsIssue("語音播報未成功，請點一下 🔊 或與頁面互動一次後再試。");
+      };
+      utterance.onend = () => {
+        if (token !== petTtsQueueToken) {
+          return;
+        }
+        setTimeout(() => {
+          petSpeakChunks(chunks, prosody, token, index + 1);
+        }, petGetChunkPauseMs(chunk));
+      };
+
       PET_SPEECH_SYNTHESIS.speak(utterance);
+    }
+
+    function petSpeakText(text, options = {}) {
+      if (!PET_SPEECH_SYNTHESIS || !petTtsEnabled) {
+        return;
+      }
+      const normalized = petSanitizeTextForTts(text);
+      if (!normalized) {
+        return;
+      }
+
+      if (!petTtsVoice) {
+        petPickTtsVoice();
+      }
+
+      const chunks = petSplitTtsChunks(normalized);
+      if (!chunks.length) {
+        return;
+      }
+      const prosody = petGetTtsProsody(options.emotion, options.isCrisisMode);
+      const token = petTtsQueueToken + 1;
+      petTtsQueueToken = token;
+
+      PET_SPEECH_SYNTHESIS.cancel();
+      petResumeSpeechOutput();
+      petSpeakChunks(chunks, prosody, token, 0);
+
+      // 某些瀏覽器偶發不進入播放，延後檢查可提供明確提示。
+      setTimeout(() => {
+        if (token !== petTtsQueueToken) {
+          return;
+        }
+        if (!PET_SPEECH_SYNTHESIS.speaking && !PET_SPEECH_SYNTHESIS.pending && petTtsEnabled) {
+          petNotifyTtsIssue("語音播報可能被瀏覽器阻擋，請先點一下頁面，再按 🔊 重試。");
+        }
+      }, 420);
     }
 
     function petUpdateVoiceButtonState() {
@@ -5048,7 +5197,10 @@
         } else {
           petAppend("pet", reply);
         }
-        petSpeakText(reply);
+        petSpeakText(reply, {
+          emotion: petCurrentEmotion,
+          isCrisisMode,
+        });
         petLastSafetyMode = isCrisisMode ? "crisis" : "normal";
         petLastCrisisPhase = isCrisisMode ? crisisPhase : "";
         petHistory.push({ role: "assistant", content: reply });
