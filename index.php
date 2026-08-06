@@ -238,6 +238,22 @@ $queries = $emotionQueries[$emotion] ?? $emotionQueries['unknown'];
       font-size: 14px;
       margin-top: 2px;
     }
+    .voice-entry {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #cfe9d8;
+      background: #eefcf2;
+      color: #1d3a2c;
+      font-size: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .voice-entry .btn {
+      margin-top: 0;
+    }
   </style>
 </head>
 <body>
@@ -256,6 +272,10 @@ $queries = $emotionQueries[$emotion] ?? $emotionQueries['unknown'];
       </div>
       <div class="seed-list">推薦音樂類型：<?= h(implode(' | ', $queries)) ?></div>
       <div class="small" style="margin-top:8px;">按下按鈕後，會顯示攝影機預覽並監測 5 秒，完成後自動關閉並把結果回傳到此頁。</div>
+      <div class="voice-entry">
+        <span>要用語音和陰晴桌寵聊天，請開啟語音版頁面。</span>
+        <a class="btn spotify" href="./scan.html">開啟語音聊天（scan.html）</a>
+      </div>
       <div class="noise-controls">
         <button id="noise-toggle" class="btn" type="button">白噪音開啟</button>
         <button id="noise-play-once" class="btn" type="button">重新播放白噪音</button>
