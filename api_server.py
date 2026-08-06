@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import concurrent.futures
 import json
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
 from emotion_camera import (
@@ -346,6 +347,75 @@ def _format_reply_for_readability(text: str) -> str:
         if block:
             blocks.append(block)
     return "\n\n".join(blocks) if blocks else normalized
+
+
+def _sanitize_tts_text(raw: object) -> str:
+    text = str(raw or "")
+    text = re.sub(r"https?://\S+", "這裡有一個連結", text, flags=re.IGNORECASE)
+    text = re.sub(r"`[^`]*`", "", text)
+    text = re.sub(r"\*\*|__|~~|[#>*_\[\]()]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:500]
+
+
+def _tts_profile(emotion: str, is_crisis_mode: bool) -> dict:
+    if is_crisis_mode:
+        return {
+            "voice": "zh-TW-HsiaoChenNeural",
+            "rate": "-12%",
+            "pitch": "-2Hz",
+            "volume": "+0%",
+        }
+
+    by_emotion = {
+        "happiness": {"voice": "zh-TW-HsiaoChenNeural", "rate": "+3%", "pitch": "+2Hz", "volume": "+0%"},
+        "sadness": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-8%", "pitch": "-2Hz", "volume": "+0%"},
+        "anger": {"voice": "zh-TW-YunJheNeural", "rate": "-6%", "pitch": "-3Hz", "volume": "+0%"},
+        "fear": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-9%", "pitch": "-1Hz", "volume": "+0%"},
+        "disgust": {"voice": "zh-TW-YunJheNeural", "rate": "-7%", "pitch": "-2Hz", "volume": "+0%"},
+        "contempt": {"voice": "zh-TW-YunJheNeural", "rate": "-4%", "pitch": "-2Hz", "volume": "+0%"},
+        "uncertain": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-2%", "pitch": "+0Hz", "volume": "+0%"},
+        "unknown": {"voice": "zh-TW-HsiaoChenNeural", "rate": "-1%", "pitch": "+0Hz", "volume": "+0%"},
+    }
+    return by_emotion.get(emotion, by_emotion["unknown"])
+
+
+def _synthesize_tts_audio(text: str, emotion: str, is_crisis_mode: bool) -> tuple[bytes | None, str | None]:
+    try:
+        import edge_tts
+    except Exception:
+        return None, "edge_tts_not_installed"
+
+    profile = _tts_profile(emotion, is_crisis_mode)
+
+    async def _run() -> bytes:
+        communicate = edge_tts.Communicate(
+            text,
+            voice=profile["voice"],
+            rate=profile["rate"],
+            pitch=profile["pitch"],
+            volume=profile["volume"],
+        )
+        audio_chunks: list[bytes] = []
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio" and chunk.get("data"):
+                audio_chunks.append(chunk["data"])
+        return b"".join(audio_chunks)
+
+    try:
+        data = asyncio.run(_run())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            data = loop.run_until_complete(_run())
+        finally:
+            loop.close()
+    except Exception as exc:
+        return None, f"tts_synthesis_failed:{exc}"
+
+    if not data:
+        return None, "tts_empty_audio"
+    return data, None
 
 
 def _build_fallback_reply(emotion: str, persona: str) -> str:
@@ -1643,6 +1713,7 @@ def index():
             "endpoints": [
                 "/health",
                 "/detect",
+                "/tts",
                 "/stress/latest",
                 "/stress/user/latest",
                 "/stress/user/history",
@@ -4164,6 +4235,25 @@ def generate():
         "tool_results": tool_results,
         "observability": observability,
     })
+
+
+@app.post("/tts")
+def tts_generate():
+    payload = request.get_json(silent=True) or {}
+    text = _sanitize_tts_text(payload.get("text", ""))
+    emotion = str(payload.get("emotion", "unknown")).strip().lower()
+    is_crisis_mode = bool(payload.get("is_crisis_mode", False))
+
+    if not text:
+        return jsonify({"error": "empty_text"}), 400
+    if emotion not in _ALLOWED_EMOTIONS:
+        emotion = "unknown"
+
+    audio_bytes, error = _synthesize_tts_audio(text, emotion, is_crisis_mode)
+    if error or not audio_bytes:
+        return jsonify({"error": error or "tts_failed"}), 503
+
+    return Response(audio_bytes, mimetype="audio/mpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/feedback")

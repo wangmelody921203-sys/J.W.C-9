@@ -1557,6 +1557,7 @@
   <script>
     const API_BASE = "https://j-w-c-9.onrender.com";
     const DETECT_API_BASE = new URLSearchParams(window.location.search).get("detectApi") || API_BASE;
+    const TTS_API_BASE = new URLSearchParams(window.location.search).get("ttsApi") || API_BASE;
     const SUPABASE_URL = "https://yqcyyenuksulrbyvzpkv.supabase.co";
     const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_j_OyZ2FEwbkcX99P26xZGA_abp1yqrQ";
     const SCAN_STORAGE_KEY = "emotionSense.latestScan";
@@ -3364,6 +3365,7 @@
     let petTtsVoice = null;
     let petTtsLastNoticeAt = 0;
     let petTtsQueueToken = 0;
+    let petTtsAudio = null;
     let petSpeechRecognition = null;
     let petSpeechListening = false;
     let petSpeechManualStop = false;
@@ -4705,11 +4707,18 @@
     }
 
     function petStopSpeechOutput() {
-      if (!PET_SPEECH_SYNTHESIS) {
-        return;
-      }
       petTtsQueueToken += 1;
-      PET_SPEECH_SYNTHESIS.cancel();
+      if (PET_SPEECH_SYNTHESIS) {
+        PET_SPEECH_SYNTHESIS.cancel();
+      }
+      if (petTtsAudio) {
+        try {
+          petTtsAudio.pause();
+          petTtsAudio.currentTime = 0;
+        } catch (_) {
+          // ignore audio stop errors
+        }
+      }
     }
 
     function petNotifyTtsIssue(message) {
@@ -4842,6 +4851,52 @@
       return 120;
     }
 
+    async function petSpeakViaServer(text, options = {}) {
+      const body = {
+        text,
+        emotion: String(options.emotion || "unknown").toLowerCase(),
+        is_crisis_mode: Boolean(options.isCrisisMode),
+      };
+
+      try {
+        const res = await fetch(`${TTS_API_BASE}/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          return false;
+        }
+
+        const blob = await res.blob();
+        if (!blob || blob.size === 0) {
+          return false;
+        }
+
+        const url = URL.createObjectURL(blob);
+        const token = petTtsQueueToken;
+        const audio = new Audio(url);
+        petTtsAudio = audio;
+        audio.preload = "auto";
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          if (token === petTtsQueueToken) {
+            petTtsAudio = null;
+          }
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          if (token === petTtsQueueToken) {
+            petTtsAudio = null;
+          }
+        };
+        await audio.play();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     function petSpeakChunks(chunks, prosody, token, index = 0) {
       if (!PET_SPEECH_SYNTHESIS || token !== petTtsQueueToken) {
         return;
@@ -4880,9 +4935,11 @@
       PET_SPEECH_SYNTHESIS.speak(utterance);
     }
 
-    function petSpeakText(text, options = {}) {
+    async function petSpeakText(text, options = {}) {
       if (!PET_SPEECH_SYNTHESIS || !petTtsEnabled) {
-        return;
+        if (!petTtsEnabled) {
+          return;
+        }
       }
       const normalized = petSanitizeTextForTts(text);
       if (!normalized) {
@@ -4900,6 +4957,16 @@
       const prosody = petGetTtsProsody(options.emotion, options.isCrisisMode);
       const token = petTtsQueueToken + 1;
       petTtsQueueToken = token;
+
+      const serverSpoken = await petSpeakViaServer(normalized, options);
+      if (serverSpoken) {
+        return;
+      }
+
+      if (!PET_SPEECH_SYNTHESIS) {
+        petNotifyTtsIssue("伺服器語音目前不可用，且瀏覽器不支援備援語音。請稍後再試。");
+        return;
+      }
 
       PET_SPEECH_SYNTHESIS.cancel();
       petResumeSpeechOutput();
