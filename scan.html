@@ -5184,15 +5184,19 @@
         return false;
       }
 
+      if (userText.length > 500) {
+        petAppend("pet", "說短一點吧，我一次只能讀 500 個字 😅");
+        return false;
+      }
+
+      petWaiting = true;
+      petSendBtn.disabled = true;
+      petUpdateVoiceButtonState();
+
       try {
         await petEnsureSessionReady(false);
       } catch (err) {
         console.warn("[pet] ensure session failed:", err);
-      }
-
-      if (userText.length > 500) {
-        petAppend("pet", "說短一點吧，我一次只能讀 500 個字 😅");
-        return false;
       }
 
       petAppend("user", userText);
@@ -5206,10 +5210,6 @@
           console.warn("[pet] save user message failed:", err);
         });
       }
-
-      petWaiting = true;
-      petSendBtn.disabled = true;
-      petUpdateVoiceButtonState();
       const loadingBubble = petAppend("loading", "陰晴正在思考…");
 
       let reply = petBuildFallback(petCurrentEmotion);
