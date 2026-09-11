@@ -281,9 +281,44 @@ def _ensure_detection_runtime() -> tuple[bool, str | None]:
     return False, _DETECT_INIT_ERROR
 
 # ──────────────────────────────────────────────
-# Groq 桌寵設定
+# LLM provider 設定（Gemini 優先，Groq 為回退）
 # ──────────────────────────────────────────────
+_GEMINI_CLIENT = None
 _GROQ_CLIENT = None
+_GROQ_MODEL_NAME = None
+
+
+def _get_gemini_client():
+    """延遲初始化 Gemini client；若無金鑰則回傳 None。"""
+    global _GEMINI_CLIENT
+    if _GEMINI_CLIENT is not None:
+        return _GEMINI_CLIENT
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        _GEMINI_CLIENT = genai
+    except Exception:
+        return None
+    return _GEMINI_CLIENT
+
+
+def _get_groq_model_candidates() -> list[str]:
+    """回傳可用的 Groq model 候選清單，優先讀取環境變數。"""
+    seen: set[str] = set()
+    candidates: list[str] = []
+    configured = str(os.environ.get("GROQ_MODEL", "")).strip()
+    for name in [configured, "llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant"]:
+        if not name:
+            continue
+        normalized = name.strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            candidates.append(normalized)
+    return candidates
+
 
 def _get_groq_client():
     """延遲初始化 Groq client；若無金鑰則回傳 None。"""
@@ -299,6 +334,71 @@ def _get_groq_client():
     except Exception:
         return None
     return _GROQ_CLIENT
+
+
+def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperature: float = 0.7) -> tuple[str, str]:
+    """以 Gemini 生成回覆，將歷史 messages 轉成單一 prompt。"""
+    client = _get_gemini_client()
+    if client is None:
+        raise RuntimeError("gemini_unavailable")
+    model_name = str(os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")).strip() or "gemini-2.0-flash"
+    try:
+        model = client.GenerativeModel(model_name)
+    except Exception:
+        model = client.GenerativeModel("gemini-2.0-flash")
+
+    rendered = []
+    for item in messages:
+        role = str(item.get("role", "user")).lower()
+        content = str(item.get("content", "")).strip()
+        if not content:
+            continue
+        if role == "system":
+            rendered.append(f"[SYSTEM]\n{content}")
+        elif role == "assistant":
+            rendered.append(f"[assistant]\n{content}")
+        else:
+            rendered.append(f"[user]\n{content}")
+    prompt = "\n\n".join(rendered) if rendered else "請回答。"
+    response = model.generate_content(
+        prompt,
+        generation_config=client.types.GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+        ),
+    )
+    text = getattr(response, "text", None)
+    if not text:
+        raise RuntimeError("empty_gemini_response")
+    return _format_reply_for_readability(text), model_name
+
+
+def _call_groq_chat_with_fallback(client, *, messages: list[dict], max_tokens: int = 260, temperature: float = 0.7, timeout: float = 12.0) -> tuple[str, str]:
+    """依候選 model 逐一重試，避免硬編碼失效模型。"""
+    last_error: Exception | None = None
+    for model_name in _get_groq_model_candidates():
+        try:
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout=timeout,
+            )
+            content = completion.choices[0].message.content
+            if content is None:
+                raise RuntimeError("empty_groq_content")
+            return _format_reply_for_readability(content), model_name
+        except Exception as exc:
+            last_error = exc
+            message = str(exc).lower()
+            if "does not exist" in message or "no access" in message or "not found" in message or "model unavailable" in message:
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("groq_model_unavailable")
+
 
 # 允許傳入的情緒標籤白名單（防提示注入）
 _ALLOWED_EMOTIONS = {
@@ -3968,17 +4068,17 @@ def generate():
     active_prompt_version = _get_active_agent_prompt_version()
     fallback_reply = _build_fallback_reply(emotion, persona)
 
-    client = _get_groq_client()
+    client = _get_gemini_client() or _get_groq_client()
     if client is None:
         observability = _agent_build_turn_observability(
             memories_rows=[],
             tool_results=[],
             latency_ms=int((time.perf_counter() - request_started) * 1000),
             fallback_used=True,
-            fallback_reason="groq_unavailable",
+            fallback_reason="llm_unavailable",
             prompt_version=active_prompt_version,
         )
-        return jsonify({"error": "groq_unavailable", "fallback": fallback_reply, "observability": observability}), 503
+        return jsonify({"error": "llm_unavailable", "fallback": fallback_reply, "observability": observability}), 503
 
     # 驗證 messages：只取 role/content，限長度
     raw_messages = payload.get("messages", [])
@@ -4243,31 +4343,34 @@ def generate():
 
     reply = ""
     last_error = None
-    for attempt in range(2):
-        try:
-            completion = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+    provider_label = "gemini" if _get_gemini_client() is not None else "groq"
+    try:
+        if _get_gemini_client() is not None:
+            reply, model_name = _call_gemini_chat(
                 messages=groq_messages,
                 max_tokens=260,
                 temperature=0.7,
-                timeout=8.0,
             )
-            reply = _format_reply_for_readability(completion.choices[0].message.content)
-            if reply:
-                break
-        except Exception as exc:
-            last_error = exc
-            if attempt == 0:
-                continue
+        else:
+            reply, model_name = _call_groq_chat_with_fallback(
+                client,
+                messages=groq_messages,
+                max_tokens=260,
+                temperature=0.7,
+                timeout=12.0,
+            )
+    except Exception as exc:
+        last_error = exc
+        reply = ""
+        app.logger.exception("LLM generate failed with active provider", exc_info=exc)
 
     if not reply and last_error is not None:
-        app.logger.exception("Groq generate failed", exc_info=last_error)
         observability = _agent_build_turn_observability(
             memories_rows=memories_rows,
             tool_results=tool_results,
             latency_ms=int((time.perf_counter() - request_started) * 1000),
             fallback_used=True,
-            fallback_reason="groq_error",
+            fallback_reason=f"{provider_label}_error",
             prompt_version=active_prompt_version,
         )
         if user_id and supabase_url and service_key:
@@ -4279,7 +4382,7 @@ def generate():
                 user_text=last_user_text,
             )
         fallback_payload = {
-            "error": "groq_error",
+            "error": f"{provider_label}_error",
             "fallback": fallback_reply,
             "tool_results": tool_results,
             "observability": observability,
