@@ -523,41 +523,6 @@ def _build_fallback_reply(emotion: str, persona: str) -> str:
     return f"{first}\n\n{second}"
 
 
-def _pick_fallback_followup(persona: str, user_text: str, emotion: str) -> str:
-    normalized_persona = str(persona or "").strip().lower()
-    text = str(user_text or "").strip()
-    lowered = text.lower()
-
-    if any(token in lowered for token in ("不知道", "不確定", "無助", "卡住", "不知道怎麼", "怎麼辦")):
-        return "如果你現在腦袋很亂，我們先只做一件最小的事：把此刻最刺痛的那一幕用一句話說出來就好。"
-    if any(token in lowered for token in ("生氣", "憤怒", "火大", "吵架", "衝突")):
-        return "要不要先把事件拆成兩段：先說發生了什麼，再說那一刻你最在意的是什麼？"
-    if any(token in lowered for token in ("難過", "想哭", "失落", "心痛", "委屈")):
-        return "你可以先不用把全部講完，只要先說剛剛那一秒最刺痛的是哪個畫面。"
-    if any(token in lowered for token in ("焦慮", "害怕", "緊張", "睡不著", "失眠")):
-        return "我們先把範圍縮小到今晚，你最擔心會發生的事情是什麼？"
-
-    if normalized_persona == "companion":
-        return "你慢慢說就好，我會陪你把它說清楚，不需要一次說完。"
-    if emotion in {"anger", "fear", "sadness"}:
-        return "你願意的話，我們先把它拆小成一個現在就能做到的下一步。"
-    return "如果你願意，我們先從你剛剛那句話裡最重的一個詞開始。"
-
-
-def _build_contextual_fallback_reply(emotion: str, persona: str, user_text: str) -> str:
-    base = _build_fallback_reply(emotion, persona)
-    text = str(user_text or "").strip()
-    if not text:
-        return base
-
-    focus = text.replace("\n", " ").strip()
-    if len(focus) > 28:
-        focus = f"{focus[:28]}…"
-    first = f"我有聽到你剛剛提到「{focus}」。"
-    followup = _pick_fallback_followup(persona, text, emotion)
-    return f"{first}\n\n{followup}"
-
-
 _CRISIS_KEYWORDS_HIGH = (
     "想死", "不想活", "自殺", "結束生命", "傷害自己", "割腕", "跳樓", "吞藥", "輕生",
     "kill myself", "suicide", "end my life", "want to die", "hurt myself", "self harm",
@@ -4054,8 +4019,6 @@ def generate():
         if m.get("role") == "assistant":
             last_assistant_text = str(m.get("content", "")).strip()
             break
-
-    fallback_reply = _build_contextual_fallback_reply(emotion, persona, last_user_text)
 
     crisis_info = _detect_crisis_signal(last_user_text)
     if crisis_info.get("is_crisis"):
