@@ -297,11 +297,15 @@ def _get_gemini_client():
     if not api_key:
         return None
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        _GEMINI_CLIENT = genai
+        from google import genai
+        _GEMINI_CLIENT = genai.Client(api_key=api_key)
     except Exception:
-        return None
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            _GEMINI_CLIENT = genai
+        except Exception:
+            return None
     return _GEMINI_CLIENT
 
 
@@ -341,11 +345,11 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
     client = _get_gemini_client()
     if client is None:
         raise RuntimeError("gemini_unavailable")
-    model_name = str(os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")).strip() or "gemini-2.0-flash"
-    try:
-        model = client.GenerativeModel(model_name)
-    except Exception:
-        model = client.GenerativeModel("gemini-2.0-flash")
+    configured_model = str(os.environ.get("GEMINI_MODEL", "")).strip()
+    model_candidates = []
+    for candidate in [configured_model, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]:
+        if candidate and candidate not in model_candidates:
+            model_candidates.append(candidate)
 
     rendered = []
     for item in messages:
@@ -360,17 +364,38 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
         else:
             rendered.append(f"[user]\n{content}")
     prompt = "\n\n".join(rendered) if rendered else "請回答。"
-    response = model.generate_content(
-        prompt,
-        generation_config=client.types.GenerationConfig(
-            max_output_tokens=max_tokens,
-            temperature=temperature,
-        ),
-    )
-    text = getattr(response, "text", None)
-    if not text:
-        raise RuntimeError("empty_gemini_response")
-    return _format_reply_for_readability(text), model_name
+
+    last_error: Exception | None = None
+    for model_name in model_candidates:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config={
+                    "max_output_tokens": max_tokens,
+                    "temperature": temperature,
+                },
+            )
+            text = getattr(response, "text", None)
+            if not text and hasattr(response, "candidates"):
+                for candidate in getattr(response, "candidates", []) or []:
+                    if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+                        parts = candidate.content.parts
+                        if parts:
+                            text = "".join(getattr(part, "text", "") for part in parts if getattr(part, "text", ""))
+                            break
+            if text:
+                return _format_reply_for_readability(text), model_name
+            raise RuntimeError("empty_gemini_response")
+        except Exception as exc:
+            last_error = exc
+            message = str(exc).lower()
+            if "not found" in message or "not supported" in message or ("model" in message and "invalid" in message):
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("gemini_model_unavailable")
 
 
 def _call_groq_chat_with_fallback(client, *, messages: list[dict], max_tokens: int = 260, temperature: float = 0.7, timeout: float = 12.0) -> tuple[str, str]:
@@ -4384,6 +4409,7 @@ def generate():
         fallback_payload = {
             "error": f"{provider_label}_error",
             "fallback": fallback_reply,
+            "details": _agent_short_text(str(last_error), 300),
             "tool_results": tool_results,
             "observability": observability,
         }
