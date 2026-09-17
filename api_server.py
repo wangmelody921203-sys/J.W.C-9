@@ -347,7 +347,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
         raise RuntimeError("gemini_unavailable")
     configured_model = str(os.environ.get("GEMINI_MODEL", "")).strip()
     model_candidates = []
-    for candidate in ["gemini-3.6-flash", configured_model, "gemini-2.5-flash", "gemini-2.5-flash-lite"]:
+    for candidate in ["gemini-2.5-flash-lite", configured_model, "gemini-2.5-flash", "gemini-3.6-flash"]:
         if candidate and candidate not in model_candidates:
             model_candidates.append(candidate)
 
@@ -368,33 +368,41 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
 
     last_error: Exception | None = None
     for model_name in model_candidates:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config={
-                    "max_output_tokens": max_tokens,
-                    "temperature": temperature,
-                    "system_instruction": system_instruction,
-                },
-            )
-            text = getattr(response, "text", None)
-            if not text and hasattr(response, "candidates"):
-                for candidate in getattr(response, "candidates", []) or []:
-                    if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
-                        parts = candidate.content.parts
-                        if parts:
-                            text = "".join(getattr(part, "text", "") for part in parts if getattr(part, "text", ""))
-                            break
-            if text:
-                return _format_reply_for_readability(text), model_name
-            raise RuntimeError("empty_gemini_response")
-        except Exception as exc:
-            last_error = exc
-            message = str(exc).lower()
-            if "not found" in message or "not supported" in message or ("model" in message and "invalid" in message):
-                continue
-            raise
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={
+                        "max_output_tokens": max_tokens,
+                        "temperature": temperature,
+                        "system_instruction": system_instruction,
+                    },
+                )
+                text = getattr(response, "text", None)
+                if not text and hasattr(response, "candidates"):
+                    for candidate in getattr(response, "candidates", []) or []:
+                        if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+                            parts = candidate.content.parts
+                            if parts:
+                                text = "".join(getattr(part, "text", "") for part in parts if getattr(part, "text", ""))
+                                break
+                if text:
+                    return _format_reply_for_readability(text), model_name
+                raise RuntimeError("empty_gemini_response")
+            except Exception as exc:
+                last_error = exc
+                message = str(exc).lower()
+                transient = "503" in message or "unavailable" in message or "high demand" in message or "429" in message or "rate limit" in message
+                invalid_model = "not found" in message or "not supported" in message or ("model" in message and "invalid" in message)
+                if invalid_model:
+                    break
+                if transient and attempt == 0:
+                    time.sleep(0.8)
+                    continue
+                if transient:
+                    break
+                raise
     if last_error is not None:
         raise last_error
     raise RuntimeError("gemini_model_unavailable")
