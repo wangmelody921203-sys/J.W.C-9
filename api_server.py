@@ -340,7 +340,7 @@ def _get_groq_client():
     return _GROQ_CLIENT
 
 
-def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 500, temperature: float = 0.7) -> tuple[str, str]:
+def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 700, temperature: float = 0.65) -> tuple[str, str]:
     """以 Gemini 生成回覆，將歷史 messages 轉成單一 prompt。"""
     client = _get_gemini_client()
     if client is None:
@@ -388,13 +388,14 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 500, temperatur
                                 text = "".join(getattr(part, "text", "") for part in parts if getattr(part, "text", ""))
                                 break
                 cleaned_text = _clean_agent_reply(text or "")
-                if cleaned_text:
+                if cleaned_text and not re.search(r"(?:的|了|是|要|想|和|或|但|因為|如果|可以|能|在|很|我|你|他|她|它|與|及|，|、|：)$", cleaned_text):
                     return cleaned_text, model_name
+                raise RuntimeError("incomplete_gemini_response")
                 raise RuntimeError("empty_gemini_response")
             except Exception as exc:
                 last_error = exc
                 message = str(exc).lower()
-                transient = "503" in message or "unavailable" in message or "high demand" in message or "429" in message or "rate limit" in message
+                transient = "503" in message or "unavailable" in message or "high demand" in message or "429" in message or "rate limit" in message or "incomplete_gemini_response" in message
                 invalid_model = "not found" in message or "not supported" in message or ("model" in message and "invalid" in message)
                 if invalid_model:
                     break
