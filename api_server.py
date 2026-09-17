@@ -352,17 +352,18 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
             model_candidates.append(candidate)
 
     rendered = []
+    system_instruction = ""
     for item in messages:
         role = str(item.get("role", "user")).lower()
         content = str(item.get("content", "")).strip()
         if not content:
             continue
         if role == "system":
-            rendered.append(f"[SYSTEM]\n{content}")
+            system_instruction = f"{system_instruction}\n\n{content}".strip()
         elif role == "assistant":
-            rendered.append(f"[assistant]\n{content}")
+            rendered.append(f"陰晴：{content}")
         else:
-            rendered.append(f"[user]\n{content}")
+            rendered.append(f"使用者：{content}")
     prompt = "\n\n".join(rendered) if rendered else "請回答。"
 
     last_error: Exception | None = None
@@ -374,6 +375,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
                 config={
                     "max_output_tokens": max_tokens,
                     "temperature": temperature,
+                    "system_instruction": system_instruction,
                 },
             )
             text = getattr(response, "text", None)
