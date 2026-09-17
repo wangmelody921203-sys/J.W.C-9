@@ -347,7 +347,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
         raise RuntimeError("gemini_unavailable")
     configured_model = str(os.environ.get("GEMINI_MODEL", "")).strip()
     model_candidates = []
-    for candidate in ["gemini-2.5-flash-lite", configured_model, "gemini-2.5-flash", "gemini-3.6-flash"]:
+    for candidate in ["gemini-3.6-flash", configured_model, "gemini-3.5-flash-lite", "gemini-3.5-flash"]:
         if candidate and candidate not in model_candidates:
             model_candidates.append(candidate)
 
@@ -368,7 +368,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
 
     last_error: Exception | None = None
     for model_name in model_candidates:
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 response = client.models.generate_content(
                     model=model_name,
@@ -397,8 +397,8 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
                 invalid_model = "not found" in message or "not supported" in message or ("model" in message and "invalid" in message)
                 if invalid_model:
                     break
-                if transient and attempt == 0:
-                    time.sleep(0.8)
+                if transient and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
                     continue
                 if transient:
                     break
