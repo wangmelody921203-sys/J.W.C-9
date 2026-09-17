@@ -387,8 +387,9 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
                             if parts:
                                 text = "".join(getattr(part, "text", "") for part in parts if getattr(part, "text", ""))
                                 break
-                if text:
-                    return _format_reply_for_readability(text), model_name
+                cleaned_text = _clean_agent_reply(text or "")
+                if cleaned_text:
+                    return cleaned_text, model_name
                 raise RuntimeError("empty_gemini_response")
             except Exception as exc:
                 last_error = exc
@@ -483,6 +484,21 @@ def _format_reply_for_readability(text: str) -> str:
         if block:
             blocks.append(block)
     return "\n\n".join(blocks) if blocks else normalized
+
+
+def _clean_agent_reply(text: str) -> str:
+    """移除模型誤回傳的內部規則片段，避免提示詞出現在聊天畫面。"""
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    leak_pattern = re.compile(
+        r"(?im)(?:^|\n)\s*(?:rule\s*\d+|規則\s*\d+|system\s*prompt|內部提示|instructions?\s*:|可用背景\s*:).*"
+    )
+    match = leak_pattern.search(normalized)
+    if match:
+        normalized = normalized[:match.start()].strip()
+    normalized = re.sub(r"(?im)^\s*\[(?:system|user|assistant)\]\s*$", "", normalized).strip()
+    return _format_reply_for_readability(normalized)
 
 
 def _sanitize_tts_text(raw: object) -> str:
