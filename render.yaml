@@ -4,4 +4,11 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn api_server:app
+    startCommand: gunicorn --workers 1 --threads 1 --timeout 120 --max-requests 80 --max-requests-jitter 10 api_server:app
+    envVars:
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: MKL_NUM_THREADS
+        value: "1"
