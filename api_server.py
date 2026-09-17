@@ -340,7 +340,7 @@ def _get_groq_client():
     return _GROQ_CLIENT
 
 
-def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperature: float = 0.7) -> tuple[str, str]:
+def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 500, temperature: float = 0.7) -> tuple[str, str]:
     """以 Gemini 生成回覆，將歷史 messages 轉成單一 prompt。"""
     client = _get_gemini_client()
     if client is None:
@@ -409,7 +409,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
     raise RuntimeError("gemini_model_unavailable")
 
 
-def _call_groq_chat_with_fallback(client, *, messages: list[dict], max_tokens: int = 260, temperature: float = 0.7, timeout: float = 12.0) -> tuple[str, str]:
+def _call_groq_chat_with_fallback(client, *, messages: list[dict], max_tokens: int = 500, temperature: float = 0.7, timeout: float = 12.0) -> tuple[str, str]:
     """依候選 model 逐一重試，避免硬編碼失效模型。"""
     last_error: Exception | None = None
     for model_name in _get_groq_model_candidates():
@@ -4399,14 +4399,14 @@ def generate():
         if _get_gemini_client() is not None:
             reply, model_name = _call_gemini_chat(
                 messages=groq_messages,
-                max_tokens=260,
+                max_tokens=500,
                 temperature=0.7,
             )
         else:
             reply, model_name = _call_groq_chat_with_fallback(
                 client,
                 messages=groq_messages,
-                max_tokens=260,
+                max_tokens=500,
                 temperature=0.7,
                 timeout=12.0,
             )
