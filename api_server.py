@@ -347,7 +347,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 260, temperatur
         raise RuntimeError("gemini_unavailable")
     configured_model = str(os.environ.get("GEMINI_MODEL", "")).strip()
     model_candidates = []
-    for candidate in [configured_model, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]:
+    for candidate in ["gemini-3.6-flash", configured_model, "gemini-2.5-flash", "gemini-2.5-flash-lite"]:
         if candidate and candidate not in model_candidates:
             model_candidates.append(candidate)
 
