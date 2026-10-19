@@ -64,6 +64,8 @@
 
 已支援你的 Arduino 序列埠輸出（每秒送 0~1023 整數）。
 
+### 本機舊版橋接流程
+
 1. 先把 Arduino 上傳你的 `sketch_jun1c.ino`。
 2. 找到 Arduino 對應的 COM 埠（例如 `COM4`）。
 3. 在專案根目錄執行：
@@ -84,37 +86,24 @@ run_stress.bat COM4
 - `POST /detect` 回傳會包含 `stress`
 - `GET /stress/latest` 可直接讀目前壓力值
 
-### 讓所有使用者都看到同一組即時壓力（雲端共享模式）
+### 個人壓力感測器（瀏覽器直接連線）
 
-若要讓所有連到網站的使用者都看到壓力波動，請把感測器端資料上傳到雲端 API：
+每位使用者可用自己的電腦和 Arduino，不需要安裝 Python 橋接程式，也不需要共用裝置或上傳密鑰：
 
-1. 在雲端後端設定環境變數：`STRESS_INGEST_TOKEN=<你的強隨機字串>`
-2. 感測器連接的那台電腦執行橋接程式，加入上傳參數：
+1. 使用最新版 Chrome 或 Edge，並透過 HTTPS 開啟網站。
+2. 先在 `scan.html` 登入，再開啟首頁的「壓力即時波動面板」。
+3. 按「連接我的壓力感測器」，在瀏覽器裝置選擇器中選 Arduino，授權後即可讀取。Arduino 序列輸出需為 9600 baud、每行一個 0~1023 整數。
+4. 網頁使用登入者的 Bearer token 呼叫 `/stress/user/report`，後端依 token 決定使用者，不接受用戶端指定其他 user_id。
 
-```powershell
-& ".venv/Scripts/python.exe" stress_serial_bridge.py --port COM4 --baud 9600 --push-url https://your-render-service.onrender.com/stress/report --push-token <你的token>
-```
+感測資料只會進入目前登入帳戶的個人壓力資料流。若瀏覽器不支援 Web Serial，請改用桌面版 Chrome/Edge；手機瀏覽器通常無法讀取 USB 序列裝置。
 
-3. 前端頁面（例如 `stress_live.html`）預設會讀目前網站同源的 `/stress/latest`
+舊版 Python `stress_serial_bridge.py` 仍可用於本機測試或管理者維護，但不適用於「每位使用者自己的裝置直接連網頁」流程。`STRESS_INGEST_TOKEN` 僅供舊版共享上傳端點使用，瀏覽器版不需要設定或分享。
 
-### 每位使用者分開壓力資料（個人分流模式）
-
-若要每位使用者有自己的壓力曲線（不是全站共用同一條）：
-
-1. 感測器橋接程式上傳時帶入 `--user-id <該使用者的Supabase user id>`
-
-```powershell
-& ".venv/Scripts/python.exe" stress_serial_bridge.py --port COM4 --baud 9600 --push-url https://your-render-service.onrender.com/stress/report --push-token <你的token> --user-id <supabase_user_id>
-```
-
-2. 前端 `stress_live.html`：
-- 已登入 `scan.html` 後，會自動讀共享的 access token，並使用 `/stress/user/latest` 抓「自己的資料」
-- 未登入時可在頁面輸入 `user_id`，會走 `/stress/latest?user_id=...`
-
-新增 API：
+壓力 API：
 
 - `POST /stress/report`：感測器端上傳壓力值（header: `X-Stress-Token`）
-- `GET /stress/latest`：所有使用者讀取最新壓力快照
+- `POST /stress/user/report`：登入者上傳自己的壓力值（header: `Authorization: Bearer <access_token>`）
+- `GET /stress/latest`：讀取舊版共享壓力快照（不是個人裝置資料）
 - `GET /stress/user/latest`：登入者讀取自己的最新壓力快照（需 Bearer token）
 - `GET /stress/user/history`：登入者讀取自己的壓力歷史（需 Bearer token）
 

@@ -75,23 +75,6 @@
       font-weight: 800;
     }
 
-    .control {
-      display: grid;
-      gap: 10px;
-      grid-template-columns: 1.6fr 130px 130px;
-      align-items: center;
-    }
-
-    .input {
-      width: 100%;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.04);
-      color: var(--text);
-      border-radius: 12px;
-      padding: 11px 12px;
-      font-size: 14px;
-    }
-
     .btn {
       border: 1px solid transparent;
       border-radius: 12px;
@@ -189,7 +172,6 @@
     }
 
     @media (max-width: 860px) {
-      .control { grid-template-columns: 1fr; }
       .sub-control { grid-template-columns: 1fr; }
       .stats { grid-template-columns: 1fr 1fr; }
       .value { font-size: 28px; }
@@ -201,25 +183,17 @@
     <section class="panel hero">
       <div>
         <h1>壓力感測即時波動面板</h1>
-        <p>接上 Arduino 壓力檢測器後，會每秒更新目前壓力分數與波動趨勢。</p>
+        <p>登入後連接自己的 Arduino，感測資料只會存入自己的帳戶。</p>
       </div>
       <a class="link-btn" href="./home.html">回首頁</a>
     </section>
 
     <section class="panel">
-      <div class="control">
-        <input id="api-base" class="input" type="text" placeholder="http://127.0.0.1:8000" aria-label="API Base URL">
-        <button id="start-btn" class="btn start" type="button">開始監測</button>
-        <button id="stop-btn" class="btn stop" type="button">停止監測</button>
+      <div style="display:flex; flex-wrap:wrap; gap:10px;">
+        <button id="connect-btn" class="btn start" type="button">連接我的壓力感測器</button>
+        <button id="disconnect-btn" class="btn stop" type="button" disabled>中斷裝置</button>
       </div>
-      <div class="sub-control">
-        <label class="toggle">
-          <input id="mode-personal" type="checkbox" checked>
-          個人模式（使用登入者 token 讀取自己的壓力）
-        </label>
-        <input id="user-id" class="input" type="text" placeholder="可選：手動指定 user_id（未登入時使用）" aria-label="User ID">
-      </div>
-      <p class="hint" style="margin:10px 0 0;">建議先啟動：1) stress_serial_bridge.py 2) api_server.py，再開此頁。你也可用網址參數 `?api=http://127.0.0.1:8000` 指定 API。</p>
+      <p class="hint" style="margin:10px 0 0;">需先在掃描頁登入，使用最新版 Chrome 或 Edge，並以 USB 將 Arduino 接到這台電腦。瀏覽器跳出裝置選擇時，選 Arduino Uno。支援透過 HTTPS 網站連線。</p>
     </section>
 
     <section class="panel">
@@ -253,19 +227,13 @@
   </main>
 
   <script>
-    const STORAGE_KEY = "stress.monitor.api.base";
-    const USER_ID_STORAGE_KEY = "stress.monitor.user.id";
+    const DEFAULT_API_BASE = "https://j-w-c-9.onrender.com";
     const AUTH_TOKEN_SHARE_KEY = "emotion.auth.access_token";
     const MAX_POINTS = 120;
     const HISTORY_BOOTSTRAP_LIMIT = 120;
-    const POLL_MS = 1000;
 
-    const params = new URLSearchParams(window.location.search);
-    const apiInput = document.getElementById("api-base");
-    const startBtn = document.getElementById("start-btn");
-    const stopBtn = document.getElementById("stop-btn");
-    const modePersonalInput = document.getElementById("mode-personal");
-    const userIdInput = document.getElementById("user-id");
+    const connectBtn = document.getElementById("connect-btn");
+    const disconnectBtn = document.getElementById("disconnect-btn");
     const scoreValue = document.getElementById("score-value");
     const levelValue = document.getElementById("level-value");
     const sensorValue = document.getElementById("sensor-value");
@@ -275,40 +243,14 @@
     const chart = document.getElementById("stress-chart");
     const ctx = chart.getContext("2d");
 
-    let timer = null;
     let points = [];
-
-    function normalizeApiBase(value) {
-      const text = String(value || "").trim().replace(/\/$/, "");
-      if (text) {
-        return text;
-      }
-      if (location.protocol.startsWith("http") && location.host) {
-        return `${location.protocol}//${location.host}`;
-      }
-      return "http://127.0.0.1:8000";
-    }
-
-    function resolveApiBase() {
-      const fromQuery = params.get("api");
-      const fromStorage = localStorage.getItem(STORAGE_KEY);
-      return normalizeApiBase(fromQuery || fromStorage || "");
-    }
-
-    function normalizeUserId(value) {
-      return String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 120);
-    }
-
-    function resolveUserId() {
-      const fromQuery = params.get("user_id") || params.get("user");
-      const fromStorage = localStorage.getItem(USER_ID_STORAGE_KEY);
-      return normalizeUserId(fromQuery || fromStorage || "");
-    }
+    let serialPort = null;
+    let serialReader = null;
+    let serialReadTask = null;
+    let serialStopping = false;
 
     function resolveAuthToken() {
-      const fromQuery = String(params.get("token") || "").trim();
-      const fromStorage = String(localStorage.getItem(AUTH_TOKEN_SHARE_KEY) || "").trim();
-      return fromQuery || fromStorage || "";
+      return String(localStorage.getItem(AUTH_TOKEN_SHARE_KEY) || "").trim();
     }
 
     function colorByLevel(level, stale) {
@@ -368,23 +310,15 @@
       }
     }
 
-    function buildStressRequest(base) {
-      const personalMode = Boolean(modePersonalInput.checked);
+    function buildStressRequest() {
       const token = resolveAuthToken();
-      const userId = normalizeUserId(userIdInput.value);
-      const headers = {};
-      let latestUrl = `${base}/stress/latest`;
-      let historyUrl = "";
-
-      if (personalMode && token) {
-        latestUrl = `${base}/stress/user/latest`;
-        historyUrl = `${base}/stress/user/history?limit=${HISTORY_BOOTSTRAP_LIMIT}`;
-        headers["Authorization"] = `Bearer ${token}`;
-      } else if (userId) {
-        latestUrl = `${base}/stress/latest?user_id=${encodeURIComponent(userId)}`;
-      }
-
-      return { latestUrl, historyUrl, headers };
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      return {
+        latestUrl: `${DEFAULT_API_BASE}/stress/user/latest`,
+        historyUrl: `${DEFAULT_API_BASE}/stress/user/history?limit=${HISTORY_BOOTSTRAP_LIMIT}`,
+        reportUrl: `${DEFAULT_API_BASE}/stress/user/report`,
+        headers,
+      };
     }
 
     function loadHistoryPoints(entries) {
@@ -401,9 +335,10 @@
       return points.length;
     }
 
-    async function bootstrapHistory(base) {
-      const req = buildStressRequest(base);
-      if (!req.historyUrl) {
+    async function bootstrapHistory() {
+      const req = buildStressRequest();
+      if (!req.headers.Authorization) {
+        setStatus("請先到掃描頁登入，再連接個人裝置", "#95a3b8");
         return;
       }
 
@@ -485,9 +420,12 @@
       ctx.fill();
     }
 
-    async function tick() {
-      const base = normalizeApiBase(apiInput.value);
-      const req = buildStressRequest(base);
+    async function loadLatest() {
+      const req = buildStressRequest();
+      if (!req.headers.Authorization) {
+        setStatus("請先登入，資料才會安全存入個人帳戶", "#95a3b8");
+        return;
+      }
 
       try {
         const res = await fetch(req.latestUrl, { cache: "no-store", headers: req.headers });
@@ -503,41 +441,142 @@
       }
     }
 
+    function payloadFromSensorValue(value) {
+      const sensorValue = Math.max(0, Math.min(1023, Math.round(value)));
+      const normalized = sensorValue / 1023;
+      const stressScore = Math.round(normalized * 100);
+      return {
+        source: "browser_serial_fsr",
+        timestamp: Math.floor(Date.now() / 1000),
+        is_stale: false,
+        sensor_value: sensorValue,
+        smoothed_value: sensorValue,
+        normalized,
+        stress_score: stressScore,
+        stress_level: stressScore >= 70 ? "high" : stressScore >= 40 ? "medium" : "low",
+      };
+    }
+
+    async function reportSensorValue(value) {
+      const payload = payloadFromSensorValue(value);
+      updateCards(payload);
+      addPoint(payload);
+      drawChart();
+
+      const req = buildStressRequest();
+      try {
+        const response = await fetch(req.reportUrl, {
+          method: "POST",
+          headers: { ...req.headers, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      } catch (error) {
+        setStatus(`資料上傳失敗：${error.message || "請檢查登入狀態"}`, "#95a3b8");
+      }
+    }
+
+    async function readSerialStream() {
+      const decoder = new TextDecoderStream();
+      const pipeClosed = serialPort.readable.pipeTo(decoder.writable).catch((error) => {
+        if (!serialStopping) throw error;
+      });
+      serialReader = decoder.readable.getReader();
+      let buffer = "";
+
+      try {
+        while (!serialStopping) {
+          const { value, done } = await serialReader.read();
+          if (done) break;
+          buffer += value;
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            const match = line.trim().match(/^-?\d+$/);
+            if (match) {
+              await reportSensorValue(Number(match[0]));
+            }
+          }
+        }
+      } finally {
+        serialReader.releaseLock();
+        serialReader = null;
+        await pipeClosed;
+      }
+    }
+
+    async function connectSensor() {
+      if (!("serial" in navigator)) {
+        setStatus("此瀏覽器不支援序列埠，請改用最新版 Chrome 或 Edge", "#ef6b6b");
+        return;
+      }
+      if (!resolveAuthToken()) {
+        setStatus("請先到掃描頁登入，再連接個人裝置", "#ef6b6b");
+        return;
+      }
+
+      try {
+        serialStopping = false;
+        serialPort = await navigator.serial.requestPort();
+        await serialPort.open({ baudRate: 9600 });
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+        setStatus("裝置已連線，等待感測資料…", "#67b2ff");
+        serialReadTask = readSerialStream();
+        serialReadTask.catch((error) => {
+          if (!serialStopping) {
+            setStatus(`裝置讀取失敗：${error.message || "請重新連線"}`, "#ef6b6b");
+          }
+        }).finally(async () => {
+          serialReadTask = null;
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          if (serialPort?.readable) {
+            await serialPort.close().catch(() => {});
+          }
+          serialPort = null;
+        });
+      } catch (error) {
+        setStatus(`無法連接裝置：${error.message || "已取消或裝置忙碌"}`, "#ef6b6b");
+      }
+    }
+
+    async function disconnectSensor() {
+      serialStopping = true;
+      if (serialReader) {
+        await serialReader.cancel().catch(() => {});
+      }
+      if (serialReadTask) {
+        await serialReadTask.catch(() => {});
+      }
+      if (serialPort?.readable) {
+        await serialPort.close().catch(() => {});
+      }
+      serialPort = null;
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      setStatus("裝置已中斷", "#95a3b8");
+    }
+
     async function startMonitoring() {
-      const base = normalizeApiBase(apiInput.value);
-      apiInput.value = base;
-      userIdInput.value = normalizeUserId(userIdInput.value);
-      localStorage.setItem(STORAGE_KEY, base);
-      if (userIdInput.value) {
-        localStorage.setItem(USER_ID_STORAGE_KEY, userIdInput.value);
-      }
-      if (timer) {
-        clearInterval(timer);
-      }
       points = [];
       drawChart();
-      setStatus("監測啟動中…", "#67b2ff");
-      await bootstrapHistory(base);
-      await tick();
-      timer = setInterval(tick, POLL_MS);
+      setStatus("載入個人壓力資料…", "#67b2ff");
+      await bootstrapHistory();
+      await loadLatest();
     }
 
-    function stopMonitoring() {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-      setStatus("監測已停止", "#95a3b8");
-    }
-
-    apiInput.value = resolveApiBase();
-    userIdInput.value = resolveUserId();
-    startBtn.addEventListener("click", startMonitoring);
-    stopBtn.addEventListener("click", stopMonitoring);
+    connectBtn.addEventListener("click", connectSensor);
+    disconnectBtn.addEventListener("click", disconnectSensor);
     window.addEventListener("resize", drawChart);
 
     drawChart();
     startMonitoring();
+    if (!("serial" in navigator)) {
+      setStatus("請使用最新版 Chrome 或 Edge 連接 USB 感測器", "#95a3b8");
+    }
   </script>
 </body>
 </html>

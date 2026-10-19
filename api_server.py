@@ -1689,6 +1689,27 @@ def _resolve_user_id_from_bearer(token: str, supabase_url: str, service_key: str
         return None
 
 
+def _resolve_verified_user_id_from_bearer(token: str, supabase_url: str, service_key: str) -> str | None:
+    req = urllib.request.Request(
+        f"{supabase_url}/auth/v1/user",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "apikey": service_key,
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status != 200:
+                return None
+            data = json.loads(resp.read())
+            user_id = str(data.get("id", "")).strip() if isinstance(data, dict) else ""
+            return user_id or None
+    except Exception as exc:
+        print(f"[STRESS] Token verification failed: {exc}")
+        return None
+
+
 def _supabase_rest_request(
     *,
     method: str,
@@ -3993,9 +4014,6 @@ def detect():
 
 @app.get("/stress/latest")
 def stress_latest():
-    requested_user_id = _normalize_stress_user_id(request.args.get("user_id", ""))
-    if requested_user_id:
-        return jsonify(_load_latest_stress_for_user(requested_user_id))
     return jsonify(_load_latest_stress())
 
 
@@ -4009,11 +4027,32 @@ def stress_user_latest():
     if not token:
         return jsonify({"error": "missing_bearer"}), 401
 
-    user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
+    user_id = _resolve_verified_user_id_from_bearer(token, supabase_url, service_key)
     if not user_id:
         return jsonify({"error": "invalid_token"}), 401
 
     return jsonify(_load_latest_stress_for_user(user_id))
+
+
+@app.post("/stress/user/report")
+def stress_user_report():
+    supabase_url, service_key = _get_supabase_config()
+    if not supabase_url or not service_key:
+        return jsonify({"error": "supabase_not_configured"}), 503
+
+    token = _extract_bearer_token()
+    if not token:
+        return jsonify({"error": "missing_bearer"}), 401
+
+    user_id = _resolve_verified_user_id_from_bearer(token, supabase_url, service_key)
+    if not user_id:
+        return jsonify({"error": "invalid_token"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    normalized = _normalize_stress_payload(payload, fallback_source="browser_serial_fsr")
+    _save_latest_stress_for_user(user_id, normalized)
+    _append_stress_history_for_user(user_id, normalized)
+    return jsonify({"ok": True, "stress": normalized})
 
 
 @app.get("/stress/user/history")
@@ -4026,7 +4065,7 @@ def stress_user_history():
     if not token:
         return jsonify({"error": "missing_bearer"}), 401
 
-    user_id = _resolve_user_id_from_bearer(token, supabase_url, service_key)
+    user_id = _resolve_verified_user_id_from_bearer(token, supabase_url, service_key)
     if not user_id:
         return jsonify({"error": "invalid_token"}), 401
 
@@ -4060,16 +4099,14 @@ def stress_report():
     expected = os.environ.get(_STRESS_INGEST_TOKEN_ENV, "").strip()
     provided = str(request.headers.get("X-Stress-Token", "")).strip()
 
-    if expected and provided != expected:
+    if not expected:
+        return jsonify({"error": "stress_ingest_not_configured"}), 503
+    if provided != expected:
         return jsonify({"error": "invalid_stress_token"}), 401
 
     payload = request.get_json(silent=True) or {}
     normalized = _normalize_stress_payload(payload, fallback_source="stress_ingest")
     _save_latest_stress(normalized)
-    report_user_id = _normalize_stress_user_id(payload.get("user_id", ""))
-    if report_user_id:
-        _save_latest_stress_for_user(report_user_id, normalized)
-        _append_stress_history_for_user(report_user_id, normalized)
     return jsonify({"ok": True, "stress": normalized})
 
 
