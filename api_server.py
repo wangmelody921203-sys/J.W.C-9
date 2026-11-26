@@ -4508,6 +4508,7 @@ def generate():
             "fallback": fallback_reply,
             "details": _agent_short_text(str(last_error), 300),
             "tool_results": tool_results,
+            "stress_support_suggested": stress_support_suggested,
             "observability": observability,
         }
         return jsonify(fallback_payload), 500

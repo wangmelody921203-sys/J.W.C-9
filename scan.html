@@ -5155,7 +5155,7 @@
       let crisisLevel = "";
       let crisisPhase = "guide";
       let stressSupportSuggested = false;
-      let hasSuccessfulResponse = false;
+      let hasStressAssessment = false;
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), PET_GENERATE_TIMEOUT_MS);
@@ -5172,7 +5172,7 @@
         clearTimeout(tid);
         if (res.ok) {
           const data = await res.json();
-          hasSuccessfulResponse = true;
+          hasStressAssessment = true;
           reply = data.reply || data.fallback || reply;
           isCrisisMode = String(data.safety_mode || "").toLowerCase() === "crisis";
           crisisLevel = String(data.crisis_level || "").toLowerCase();
@@ -5181,6 +5181,10 @@
         } else {
           const data = await res.json().catch(() => ({}));
           reply = data.fallback || reply;
+          if (typeof data.stress_support_suggested === "boolean") {
+            hasStressAssessment = true;
+            stressSupportSuggested = data.stress_support_suggested;
+          }
         }
       } catch (_) {
         // 超時或網路錯誤 → 固定回退文案
@@ -5214,7 +5218,7 @@
         petLastCrisisPhase = isCrisisMode ? crisisPhase : "";
         petRecordAssistantMessage(reply);
 
-        if (!isCrisisMode && acceptedStressSupport && hasSuccessfulResponse) {
+        if (!isCrisisMode && acceptedStressSupport && hasStressAssessment) {
           petAppendStressSensorLink();
         } else if (
           !isCrisisMode
