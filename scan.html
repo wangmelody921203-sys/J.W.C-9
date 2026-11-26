@@ -1187,6 +1187,20 @@
       border: 1px solid rgba(135, 206, 250, 0.35);
       color: #e1f3ff;
     }
+    .pet-stress-link {
+      display: inline-flex;
+      margin-top: 8px;
+      padding: 6px 10px;
+      border: 1px solid rgba(50, 217, 124, 0.35);
+      border-radius: 9px;
+      background: rgba(50, 217, 124, 0.08);
+      color: #ccfbe3;
+      font-size: 12px;
+      text-decoration: none;
+    }
+    .pet-stress-link:hover {
+      background: rgba(50, 217, 124, 0.16);
+    }
 
     .pet-input-row {
       display: flex;
@@ -3375,6 +3389,9 @@
     let petLastCrisisLevel = "";
     let petLastCrisisPhase = "";
     let petLastCrisisNoticeAt = 0;
+    let petStressSupportSessionId = "";
+    let petStressSupportShown = false;
+    let petStressSupportPending = false;
     const PET_CRISIS_NOTICE_COOLDOWN_MS = 2 * 60 * 1000;
     const PET_PANEL_EXPANDED_KEY = "pet-panel-expanded-v1";
     const PET_PANEL_SIZE_KEY = "pet-panel-size-v1";
@@ -5041,6 +5058,58 @@
       return headers;
     }
 
+    function petResetStressSupportStateForSession() {
+      const sessionId = petCurrentSessionId || "guest";
+      if (sessionId === petStressSupportSessionId) {
+        return;
+      }
+      petStressSupportSessionId = sessionId;
+      petStressSupportShown = false;
+      petStressSupportPending = false;
+    }
+
+    function petIsStressSupportAcceptance(text) {
+      const normalized = String(text || "").trim().replace(/[，。！？、\s]/g, "");
+      if (/^(?:不要|不想|先不用|不需要|算了|跳過|沒關係|不用)/.test(normalized)) {
+        return false;
+      }
+      return new Set([
+        "好", "好啊", "好的", "好我覺得可以", "好我想試試",
+        "可以", "可以啊", "我覺得可以", "願意", "我願意",
+        "想試", "想試試", "我想試", "我想試試", "試一下",
+        "帶我去", "想看看", "我想看看",
+      ]).has(normalized);
+    }
+
+    function petRecordAssistantMessage(text) {
+      petHistory.push({ role: "assistant", content: text });
+      if (petHistory.length > 300) {
+        petHistory.splice(0, petHistory.length - 300);
+      }
+      petSaveCurrentLocalHistory();
+      if (petCanUseCloud() && petCurrentSessionId && !petCurrentSessionId.startsWith("local-")) {
+        petSaveCloudMessage("assistant", text).catch((err) => {
+          console.warn("[pet] save assistant message failed:", err);
+        });
+      }
+    }
+
+    function petAppendStressSensorLink() {
+      const message = "如果你願意，可以前往壓力感測頁連接裝置，看看握壓的變化。";
+      const bubble = petAppend("pet", message);
+      const link = document.createElement("a");
+      link.className = "pet-stress-link";
+      link.href = "./stress_live.html";
+      link.textContent = "前往壓力感測頁";
+      bubble.appendChild(document.createElement("br"));
+      bubble.appendChild(link);
+      petRecordAssistantMessage(message);
+      petSpeakText("如果你願意，可以前往壓力感測頁連接裝置，看看握壓的變化。", {
+        emotion: petCurrentEmotion,
+        isCrisisMode: false,
+      });
+    }
+
     async function petSend(userText) {
       userText = userText.trim();
       if (!userText) return false;
@@ -5063,6 +5132,11 @@
         console.warn("[pet] ensure session failed:", err);
       }
 
+      petResetStressSupportStateForSession();
+      const wasStressSupportPending = petStressSupportPending;
+      const acceptedStressSupport = wasStressSupportPending && petIsStressSupportAcceptance(userText);
+      petStressSupportPending = false;
+
       petAppend("user", userText);
       petHistory.push({ role: "user", content: userText });
       if (petHistory.length > 300) {
@@ -5080,6 +5154,8 @@
       let isCrisisMode = false;
       let crisisLevel = "";
       let crisisPhase = "guide";
+      let stressSupportSuggested = false;
+      let hasSuccessfulResponse = false;
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), PET_GENERATE_TIMEOUT_MS);
@@ -5096,10 +5172,12 @@
         clearTimeout(tid);
         if (res.ok) {
           const data = await res.json();
+          hasSuccessfulResponse = true;
           reply = data.reply || data.fallback || reply;
           isCrisisMode = String(data.safety_mode || "").toLowerCase() === "crisis";
           crisisLevel = String(data.crisis_level || "").toLowerCase();
           crisisPhase = String(data.crisis_phase || "guide").toLowerCase();
+          stressSupportSuggested = data.stress_support_suggested === true;
         } else {
           const data = await res.json().catch(() => ({}));
           reply = data.fallback || reply;
@@ -5134,14 +5212,23 @@
         });
         petLastSafetyMode = isCrisisMode ? "crisis" : "normal";
         petLastCrisisPhase = isCrisisMode ? crisisPhase : "";
-        petHistory.push({ role: "assistant", content: reply });
-        if (petHistory.length > 300) {
-          petHistory.splice(0, petHistory.length - 300);
-        }
-        petSaveCurrentLocalHistory();
-        if (petCanUseCloud() && petCurrentSessionId && !petCurrentSessionId.startsWith("local-")) {
-          petSaveCloudMessage("assistant", reply).catch((err) => {
-            console.warn("[pet] save assistant message failed:", err);
+        petRecordAssistantMessage(reply);
+
+        if (!isCrisisMode && acceptedStressSupport && hasSuccessfulResponse) {
+          petAppendStressSensorLink();
+        } else if (
+          !isCrisisMode
+          && stressSupportSuggested
+          && !petStressSupportShown
+        ) {
+          const checkIn = "聽起來最近壓力有點滿，我有理解對嗎？";
+          petStressSupportShown = true;
+          petStressSupportPending = true;
+          petAppend("pet", checkIn);
+          petRecordAssistantMessage(checkIn);
+          petSpeakText(checkIn, {
+            emotion: petCurrentEmotion,
+            isCrisisMode: false,
           });
         }
       } finally {

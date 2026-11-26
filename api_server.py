@@ -702,6 +702,36 @@ def _detect_crisis_signal(raw: str) -> dict:
     return {"is_crisis": False, "level": "none", "matched": []}
 
 
+_STRESS_SUPPORT_EXPLICIT_CUES = (
+    "壓力好大", "壓力很大", "壓力太大", "壓力超大", "壓力很重",
+    "快被壓垮", "被壓垮", "喘不過氣",
+)
+_STRESS_SUPPORT_REPEATED_CUES = (
+    "好煩", "很煩", "煩死了", "好累", "很累", "累爆", "焦慮", "緊繃",
+)
+
+
+def _should_offer_stress_sensor(messages: list[dict]) -> bool:
+    user_texts = [
+        str(item.get("content", "")).strip().lower()
+        for item in messages
+        if isinstance(item, dict)
+        and item.get("role") == "user"
+        and str(item.get("content", "")).strip()
+    ][-4:]
+    if not user_texts or any(_detect_crisis_signal(text)["is_crisis"] for text in user_texts):
+        return False
+
+    if any(cue in user_texts[-1] for cue in _STRESS_SUPPORT_EXPLICIT_CUES):
+        return True
+
+    repeated_stress_turns = sum(
+        any(cue in text for cue in _STRESS_SUPPORT_REPEATED_CUES)
+        for text in user_texts
+    )
+    return repeated_stress_turns >= 2
+
+
 def _pick_crisis_lead(emotion: str, seed_text: str = "", previous_assistant: str = "") -> str:
     by_emotion = {
         "sadness": (
@@ -4256,11 +4286,14 @@ def generate():
             "persona": persona,
             "tool_results": [],
             "safety_mode": "crisis",
+            "stress_support_suggested": False,
             "crisis_level": crisis_info.get("level", "medium"),
             "crisis_phase": crisis_phase,
             "prompt_version": active_prompt_version,
             "observability": observability,
         })
+
+    stress_support_suggested = _should_offer_stress_sensor(clean_messages)
 
     # 在 system prompt 後插入當次情緒脈絡（結構化，不直接拼接用戶輸入）
     emotion_context = f"[本次掃描偵測到的情緒（僅供參考）：{emotion}]"
@@ -4509,6 +4542,7 @@ def generate():
         "persona": persona,
         "prompt_version": active_prompt_version,
         "tool_results": tool_results,
+        "stress_support_suggested": stress_support_suggested,
         "observability": observability,
     })
 
