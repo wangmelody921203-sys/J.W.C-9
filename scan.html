@@ -5114,13 +5114,102 @@
       }
     }
 
+    const PET_GRIP_STARTED_KEY = "emotion.pet.grip_started_at";
+    const PET_GRIP_FOLLOW_UP_WINDOW_SEC = 30 * 60;
+    const PET_GRIP_POLL_MS = 8000;
+    let petGripChecking = false;
+    let petGripPollTimer = null;
+
+    // 只看有實際握壓的樣本，比較前後段平均；握壓下降才說放鬆，不做壓力診斷
+    function petAnalyzeGripSession(entries, nowSec) {
+      const rows = (Array.isArray(entries) ? entries : [])
+        .filter((e) => e && typeof e === "object" && !e.is_stale)
+        .map((e) => ({ ts: Number(e.timestamp || 0), score: Number(e.stress_score || 0) }))
+        .filter((e) => e.ts > 0 && Number.isFinite(e.score))
+        .sort((a, b) => a.ts - b.ts);
+      const active = rows.filter((e) => e.score >= 10);
+      if (active.length < 6) {
+        return { state: "none" };
+      }
+      const lastTs = rows[rows.length - 1].ts;
+      if (nowSec - lastTs < 6) {
+        return { state: "ongoing" };
+      }
+      const third = Math.max(2, Math.floor(active.length / 3));
+      const mean = (list) => list.reduce((sum, e) => sum + e.score, 0) / list.length;
+      const drop = mean(active.slice(0, third)) - mean(active.slice(-third));
+      const seconds = Math.max(1, active[active.length - 1].ts - active[0].ts);
+      return { state: drop >= 10 ? "relaxed" : "held", seconds };
+    }
+
+    function petBuildGripFollowUp(result) {
+      const seconds = Math.max(1, Math.round(result.seconds / 5) * 5);
+      if (result.state === "relaxed") {
+        return `剛剛你握了大概 ${seconds} 秒，後面握得比一開始輕了一點，感覺身體稍微鬆下來了。辛苦你了，現在有好一些嗎？`;
+      }
+      return `謝謝你剛剛願意握著我的手，陪了你大概 ${seconds} 秒。現在感覺怎麼樣？想繼續聊聊也可以。`;
+    }
+
+    function petClearGripFollowUp() {
+      localStorage.removeItem(PET_GRIP_STARTED_KEY);
+      if (petGripPollTimer) {
+        clearInterval(petGripPollTimer);
+        petGripPollTimer = null;
+      }
+    }
+
+    async function petCheckGripFollowUp() {
+      if (petGripChecking || petWaiting) return;
+      const startedAt = Number(localStorage.getItem(PET_GRIP_STARTED_KEY) || 0);
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (!startedAt || nowSec - startedAt > PET_GRIP_FOLLOW_UP_WINDOW_SEC) {
+        petClearGripFollowUp();
+        return;
+      }
+      if (petLastSafetyMode === "crisis" || !petBuildGenerateHeaders().Authorization) {
+        return;
+      }
+      petGripChecking = true;
+      try {
+        const res = await fetch(`${API_BASE}/stress/user/history?limit=600&since=${startedAt}`, {
+          cache: "no-store",
+          headers: petBuildGenerateHeaders(),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const result = petAnalyzeGripSession(data.entries, Math.floor(Date.now() / 1000));
+        if (result.state !== "relaxed" && result.state !== "held") return;
+        petClearGripFollowUp();
+        const message = petBuildGripFollowUp(result);
+        petAppend("pet", message);
+        petRecordAssistantMessage(message);
+        petSpeakText(message, { emotion: petCurrentEmotion, isCrisisMode: false });
+      } catch (err) {
+        console.warn("[pet] grip follow-up failed:", err);
+      } finally {
+        petGripChecking = false;
+      }
+    }
+
+    function petStartGripFollowUpWatch() {
+      if (petGripPollTimer || !localStorage.getItem(PET_GRIP_STARTED_KEY)) return;
+      petGripPollTimer = setInterval(() => { void petCheckGripFollowUp(); }, PET_GRIP_POLL_MS);
+      void petCheckGripFollowUp();
+    }
+
     function petAppendStressSensorLink() {
       const message = "好，我在這裡。握著它，我們一起慢慢呼吸，不用說話也可以。";
       const bubble = petAppend("pet", message);
       const link = document.createElement("a");
       link.className = "pet-stress-link";
       link.href = "./stress_live.html";
+      link.target = "_blank";
+      link.rel = "noopener";
       link.textContent = "握住我的手";
+      link.addEventListener("click", () => {
+        localStorage.setItem(PET_GRIP_STARTED_KEY, String(Math.floor(Date.now() / 1000)));
+        petStartGripFollowUpWatch();
+      });
       bubble.appendChild(document.createElement("br"));
       bubble.appendChild(link);
       petRecordAssistantMessage(message);
@@ -5298,6 +5387,7 @@
     });
 
     petLoadTtsSetting();
+    petStartGripFollowUpWatch();
     petPickTtsVoice();
     if (PET_SPEECH_SYNTHESIS && typeof PET_SPEECH_SYNTHESIS.onvoiceschanged !== "undefined") {
       PET_SPEECH_SYNTHESIS.onvoiceschanged = () => {
