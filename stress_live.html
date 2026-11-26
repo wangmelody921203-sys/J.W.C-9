@@ -229,7 +229,8 @@
   <script>
     const DEFAULT_API_BASE = "https://j-w-c-9.onrender.com";
     const AUTH_TOKEN_SHARE_KEY = "emotion.auth.access_token";
-    const MAX_POINTS = 120;
+    const MAX_POINTS = 700;
+    const CHART_WINDOW_MS = 120000;
     const HISTORY_BOOTSTRAP_LIMIT = 120;
 
     const connectBtn = document.getElementById("connect-btn");
@@ -253,11 +254,19 @@
       return String(localStorage.getItem(AUTH_TOKEN_SHARE_KEY) || "").trim();
     }
 
+    const colorCache = {};
+    function cssColor(name) {
+      if (!colorCache[name]) {
+        colorCache[name] = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      }
+      return colorCache[name];
+    }
+
     function colorByLevel(level, stale) {
-      if (stale) return getComputedStyle(document.documentElement).getPropertyValue("--stale").trim();
-      if (level === "high") return getComputedStyle(document.documentElement).getPropertyValue("--high").trim();
-      if (level === "medium") return getComputedStyle(document.documentElement).getPropertyValue("--mid").trim();
-      return getComputedStyle(document.documentElement).getPropertyValue("--low").trim();
+      if (stale) return cssColor("--stale");
+      if (level === "high") return cssColor("--high");
+      if (level === "medium") return cssColor("--mid");
+      return cssColor("--low");
     }
 
     function levelText(level) {
@@ -308,6 +317,20 @@
       if (points.length > MAX_POINTS) {
         points = points.slice(points.length - MAX_POINTS);
       }
+      const cutoff = points[points.length - 1].ts - CHART_WINDOW_MS;
+      if (points[0].ts < cutoff) {
+        points = points.filter((p) => p.ts >= cutoff);
+      }
+    }
+
+    let drawQueued = false;
+    function scheduleDraw() {
+      if (drawQueued) return;
+      drawQueued = true;
+      requestAnimationFrame(() => {
+        drawQueued = false;
+        drawChart();
+      });
     }
 
     function buildStressRequest() {
@@ -402,8 +425,10 @@
 
       ctx.lineWidth = 2.2;
       ctx.beginPath();
+      const t0 = points[points.length - 1].ts - CHART_WINDOW_MS;
+      const xOf = (ts) => padL + (gw * Math.max(0, ts - t0)) / CHART_WINDOW_MS;
       points.forEach((point, i) => {
-        const x = padL + (gw * i) / Math.max(1, points.length - 1);
+        const x = xOf(point.ts);
         const y = padT + gh * (1 - point.score / 100);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -412,7 +437,7 @@
       ctx.strokeStyle = colorByLevel(last.level, last.stale);
       ctx.stroke();
 
-      const lastX = padL + (gw * (points.length - 1)) / Math.max(1, points.length - 1);
+      const lastX = xOf(last.ts);
       const lastY = padT + gh * (1 - last.score / 100);
       ctx.fillStyle = colorByLevel(last.level, last.stale);
       ctx.beginPath();
@@ -465,7 +490,7 @@
       const payload = payloadFromSensorValue(value);
       updateCards(payload);
       addPoint(payload);
-      drawChart();
+      scheduleDraw();
 
       const now = Date.now();
       if (uploadInFlight || now - lastUploadAt < 1000) return;
