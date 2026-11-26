@@ -1,7 +1,8 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from api_server import app, _call_gemini_chat, _should_offer_stress_sensor
+from api_server import app, _call_gemini_chat, _call_groq_chat_with_fallback, _should_offer_stress_sensor
 
 
 def user_messages(*texts: str) -> list[dict[str, str]]:
@@ -35,6 +36,7 @@ class GeminiTimeoutTests(unittest.TestCase):
     def test_request_has_bounded_timeout_and_disables_sdk_retries(self) -> None:
         client = Mock()
         client.models.generate_content.return_value.text = "我在這裡陪你。"
+        client.models.generate_content.return_value.candidates = []
         with patch("api_server._get_gemini_client", return_value=client):
             reply, _ = _call_gemini_chat(messages=[{"role": "user", "content": "你好"}])
 
@@ -83,6 +85,51 @@ class GeminiTimeoutTests(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(data["safety_mode"], "crisis")
         self.assertFalse(data["stress_support_suggested"])
+
+
+class CompleteReplyTests(unittest.TestCase):
+    def test_gemini_retries_a_reply_ending_mid_sentence(self) -> None:
+        client = Mock()
+        client.models.generate_content.side_effect = [
+            SimpleNamespace(text="辛苦你了。如果可以的話，要不要先試著喝", candidates=[]),
+            SimpleNamespace(text="辛苦你了。如果可以的話，先喝口水吧。", candidates=[]),
+        ]
+        with patch("api_server._get_gemini_client", return_value=client), \
+             patch("api_server.time.sleep"):
+            reply, _ = _call_gemini_chat(messages=[{"role": "user", "content": "我好累"}])
+        self.assertEqual(reply, "辛苦你了。如果可以的話，先喝口水吧。")
+        self.assertEqual(client.models.generate_content.call_count, 2)
+
+    def test_gemini_retries_token_limited_output_even_if_punctuated(self) -> None:
+        client = Mock()
+        client.models.generate_content.side_effect = [
+            SimpleNamespace(text="我聽到了。", candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")]),
+            SimpleNamespace(text="我聽到了，我陪你。", candidates=[SimpleNamespace(finish_reason="STOP")]),
+        ]
+        with patch("api_server._get_gemini_client", return_value=client), \
+             patch("api_server.time.sleep"):
+            reply, _ = _call_gemini_chat(messages=[{"role": "user", "content": "我好累"}])
+        self.assertEqual(reply, "我聽到了，我陪你。")
+        self.assertEqual(client.models.generate_content.call_count, 2)
+
+    def test_groq_does_not_return_token_limited_output(self) -> None:
+        client = Mock()
+        client.chat.completions.create.return_value.choices = [
+            SimpleNamespace(message=SimpleNamespace(content="辛苦你了。如果可以的話，要不要先試著喝"), finish_reason="length")
+        ]
+        with self.assertRaisesRegex(RuntimeError, "incomplete"):
+            _call_groq_chat_with_fallback(client, messages=[{"role": "user", "content": "我好累"}])
+
+    def test_incomplete_gemini_replies_are_not_returned_after_retries(self) -> None:
+        client = Mock()
+        client.models.generate_content.return_value = SimpleNamespace(
+            text="辛苦你了。如果可以的話，要不要先試著喝",
+            candidates=[],
+        )
+        with patch("api_server._get_gemini_client", return_value=client), \
+             patch("api_server.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                _call_gemini_chat(messages=[{"role": "user", "content": "我好累"}])
 
 
 if __name__ == "__main__":

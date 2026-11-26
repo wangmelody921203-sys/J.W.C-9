@@ -1138,6 +1138,14 @@
     .pet-messages::-webkit-scrollbar { width: 4px; }
     .pet-messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
 
+    .pet-service-status {
+      padding: 5px 14px;
+      color: #f5be82;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    .pet-service-status:empty { display: none; }
+
     .pet-bubble {
       max-width: 88%;
       padding: 10px 13px;
@@ -1557,6 +1565,7 @@
       </div>
     </div>
     <div id="pet-messages" class="pet-messages"></div>
+    <div id="pet-service-status" class="pet-service-status" role="status" aria-live="polite"></div>
     <div class="pet-input-row">
       <textarea id="pet-input" class="pet-input" rows="1"
         placeholder="說點什麼…（Enter 送出）" maxlength="500"></textarea>
@@ -3348,6 +3357,7 @@
     const petMemoryHistoryBox = document.getElementById("pet-memory-history");
     const petMemoryHistoryList = document.getElementById("pet-memory-history-list");
     const petMessages = document.getElementById("pet-messages");
+    const petServiceStatus = document.getElementById("pet-service-status");
     const petInput    = document.getElementById("pet-input");
     const petTtsBtn   = document.getElementById("pet-tts");
     const petSendBtn  = document.getElementById("pet-send");
@@ -3834,8 +3844,15 @@
         if (!item || (item.role !== "user" && item.role !== "assistant")) {
           return;
         }
-        petAppend(item.role === "user" ? "user" : "pet", item.content || "");
+        const content = item.role === "assistant"
+          ? petCleanLegacyServiceNotice(item.content)
+          : item.content || "";
+        petAppend(item.role === "user" ? "user" : "pet", content);
       });
+    }
+
+    function petCleanLegacyServiceNotice(text) {
+      return String(text || "").replace(/\n\n目前對話服務暫時無法正常回應，請稍後再試。$/, "");
     }
 
     function petEnsureLocalSession(forceReset = false) {
@@ -5074,7 +5091,7 @@
         return false;
       }
       return new Set([
-        "好", "好啊", "好的", "好我覺得可以", "好我想試試",
+        "好", "好啊", "好的", "對", "對啊", "沒錯", "好我覺得可以", "好我想試試",
         "可以", "可以啊", "我覺得可以", "願意", "我願意",
         "想試", "想試試", "我想試", "我想試試", "試一下",
         "帶我去", "想看看", "我想看看",
@@ -5122,6 +5139,7 @@
 
       petWaiting = true;
       petSendBtn.disabled = true;
+      petServiceStatus.textContent = "";
 
       try {
         await petEnsureSessionReady(false);
@@ -5163,7 +5181,10 @@
           body: JSON.stringify({
             emotion: petCurrentEmotion,
             persona: petPersona,
-            messages: petHistory.slice(-20),
+            messages: petHistory.slice(-20).map((item) => ({
+              ...item,
+              content: item.role === "assistant" ? petCleanLegacyServiceNotice(item.content) : item.content,
+            })),
           }),
           signal: ctrl.signal,
         });
@@ -5193,7 +5214,7 @@
       try {
         loadingBubble.remove();
         if (serviceUnavailable) {
-          reply += "\n\n目前對話服務暫時無法正常回應，請稍後再試。";
+          petServiceStatus.textContent = "連線或回覆異常，請稍後再試";
         }
         if (isCrisisMode) {
           const phaseChanged = petLastSafetyMode === "crisis"

@@ -396,10 +396,11 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
                                 text = "".join(getattr(part, "text", "") for part in parts if getattr(part, "text", ""))
                                 break
                 cleaned_text = _clean_agent_reply(text or "")
-                if cleaned_text and not re.search(r"(?:的|了|是|要|想|和|或|但|因為|如果|可以|能|在|很|我|你|他|她|它|與|及|，|、|：)$", cleaned_text):
+                candidates = getattr(response, "candidates", None) or []
+                finish_reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+                if _is_complete_agent_reply(cleaned_text, finish_reason):
                     return cleaned_text, model_name
                 raise RuntimeError("incomplete_gemini_response")
-                raise RuntimeError("empty_gemini_response")
             except Exception as exc:
                 last_error = exc
                 message = str(exc).lower()
@@ -433,10 +434,14 @@ def _call_groq_chat_with_fallback(client, *, messages: list[dict], max_tokens: i
                 temperature=temperature,
                 timeout=timeout,
             )
-            content = completion.choices[0].message.content
+            choice = completion.choices[0]
+            content = choice.message.content
             if content is None:
                 raise RuntimeError("empty_groq_content")
-            return _format_reply_for_readability(content), model_name
+            cleaned_text = _clean_agent_reply(content)
+            if not _is_complete_agent_reply(cleaned_text, choice.finish_reason):
+                raise RuntimeError("incomplete_groq_response")
+            return cleaned_text, model_name
         except Exception as exc:
             last_error = exc
             message = str(exc).lower()
@@ -511,6 +516,13 @@ def _clean_agent_reply(text: str) -> str:
         normalized = normalized[:match.start()].strip()
     normalized = re.sub(r"(?im)^\s*\[(?:system|user|assistant)\]\s*$", "", normalized).strip()
     return _format_reply_for_readability(normalized)
+
+
+def _is_complete_agent_reply(text: str, finish_reason: object = None) -> bool:
+    reason = str(getattr(finish_reason, "value", finish_reason) or "").upper()
+    if reason in {"MAX_TOKENS", "LENGTH"}:
+        return False
+    return bool(re.search(r"""[。！？!?….][」』”’"'）)\]】]*$""", text.strip()))
 
 
 def _sanitize_tts_text(raw: object) -> str:
@@ -878,7 +890,7 @@ _PERSONA_PROMPTS: dict[str, str] = {
    - 先說明受傷感是可以理解的
    - 再提醒這不代表他不值得被重視
    - 最後給一個很小、很可行的下一步
-7. 可以長文，但請分段：固定輸出 2-3 段，每段 1-3 句，段落間空一行。
+7. 回覆以 2-4 個簡短完整的句子為主，可分成 2-3 段，最後一句要完整結束。
 8. 若要給建議，一次只給一個，不要連續列太多方法。
 9. 保留 Brené Brown 精神：勇氣、脆弱、連結與清晰；但用日常語言，不要背理論名詞。
 10. 不做診斷、不給醫療建議、不預測未來。
