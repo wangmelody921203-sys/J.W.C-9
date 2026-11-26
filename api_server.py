@@ -345,7 +345,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
     client = _get_gemini_client()
     if client is None:
         raise RuntimeError("gemini_unavailable")
-    deadline = time.monotonic() + 18.0
+    deadline = time.monotonic() + 26.0
     configured_model = str(os.environ.get("GEMINI_MODEL", "")).strip()
     model_candidates = []
     for candidate in ["gemini-3.6-flash", configured_model, "gemini-3.5-flash-lite", "gemini-3.5-flash"]:
@@ -371,7 +371,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
     for model_name in model_candidates:
         for attempt in range(3):
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if remaining < 12.0:
                 raise TimeoutError("gemini_request_deadline_exceeded") from last_error
             try:
                 response = client.models.generate_content(
@@ -382,7 +382,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
                         "temperature": temperature,
                         "system_instruction": system_instruction,
                         "http_options": {
-                            "timeout": max(1, int(min(12.0, remaining) * 1000)),
+                            "timeout": int(min(20.0, remaining) * 1000),
                             "retry_options": {"attempts": 1},
                         },
                     },
@@ -522,7 +522,10 @@ def _is_complete_agent_reply(text: str, finish_reason: object = None) -> bool:
     reason = str(getattr(finish_reason, "value", finish_reason) or "").upper()
     if reason in {"MAX_TOKENS", "LENGTH"}:
         return False
-    return bool(re.search(r"""[。！？!?….][」』”’"'）)\]】]*$""", text.strip()))
+    return bool(re.search(
+        r"""[。！？!?….][」』”’"'）)\]】\s\u200d\u2600-\u27bf\ufe0e\ufe0f\U0001f000-\U0001faff]*$""",
+        text.strip(),
+    ))
 
 
 def _sanitize_tts_text(raw: object) -> str:

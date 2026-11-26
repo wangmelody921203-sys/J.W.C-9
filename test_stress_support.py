@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from api_server import app, _call_gemini_chat, _call_groq_chat_with_fallback, _should_offer_stress_sensor
+from api_server import app, _call_gemini_chat, _call_groq_chat_with_fallback, _is_complete_agent_reply, _should_offer_stress_sensor
 
 
 def user_messages(*texts: str) -> list[dict[str, str]]:
@@ -43,7 +43,7 @@ class GeminiTimeoutTests(unittest.TestCase):
         self.assertEqual(reply, "我在這裡陪你。")
         http_options = client.models.generate_content.call_args.kwargs["config"]["http_options"]
         self.assertGreater(http_options["timeout"], 0)
-        self.assertLessEqual(http_options["timeout"], 12000)
+        self.assertLessEqual(http_options["timeout"], 20000)
         self.assertEqual(http_options["retry_options"]["attempts"], 1)
 
     def test_network_timeout_is_not_retried(self) -> None:
@@ -51,6 +51,18 @@ class GeminiTimeoutTests(unittest.TestCase):
         client.models.generate_content.side_effect = TimeoutError("read timed out")
         with patch("api_server._get_gemini_client", return_value=client):
             with self.assertRaises(TimeoutError):
+                _call_gemini_chat(messages=[{"role": "user", "content": "你好"}])
+        self.assertEqual(client.models.generate_content.call_count, 1)
+
+    def test_does_not_retry_with_short_remaining_deadline(self) -> None:
+        client = Mock()
+        client.models.generate_content.return_value = SimpleNamespace(
+            text="要不要先試著喝", candidates=[]
+        )
+        with patch("api_server._get_gemini_client", return_value=client), \
+             patch("api_server.time.monotonic", side_effect=[0, 0, 14, 20]), \
+             patch("api_server.time.sleep"):
+            with self.assertRaisesRegex(TimeoutError, "gemini_request_deadline_exceeded"):
                 _call_gemini_chat(messages=[{"role": "user", "content": "你好"}])
         self.assertEqual(client.models.generate_content.call_count, 1)
 
@@ -88,6 +100,11 @@ class GeminiTimeoutTests(unittest.TestCase):
 
 
 class CompleteReplyTests(unittest.TestCase):
+    def test_complete_sentence_can_end_with_emoji(self) -> None:
+        self.assertTrue(_is_complete_agent_reply("我在這裡陪你。❤️"))
+        self.assertFalse(_is_complete_agent_reply("要不要先試著喝❤️"))
+        self.assertFalse(_is_complete_agent_reply("我在這裡陪你。❤️", "MAX_TOKENS"))
+
     def test_gemini_retries_a_reply_ending_mid_sentence(self) -> None:
         client = Mock()
         client.models.generate_content.side_effect = [
