@@ -5104,10 +5104,7 @@
       bubble.appendChild(document.createElement("br"));
       bubble.appendChild(link);
       petRecordAssistantMessage(message);
-      petSpeakText("如果你願意，可以前往壓力感測頁連接裝置，看看握壓的變化。", {
-        emotion: petCurrentEmotion,
-        isCrisisMode: false,
-      });
+      return message;
     }
 
     async function petSend(userText) {
@@ -5156,6 +5153,7 @@
       let crisisPhase = "guide";
       let stressSupportSuggested = false;
       let hasStressAssessment = false;
+      let serviceUnavailable = false;
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), PET_GENERATE_TIMEOUT_MS);
@@ -5181,17 +5179,22 @@
         } else {
           const data = await res.json().catch(() => ({}));
           reply = data.fallback || reply;
+          serviceUnavailable = true;
           if (typeof data.stress_support_suggested === "boolean") {
             hasStressAssessment = true;
             stressSupportSuggested = data.stress_support_suggested;
           }
         }
-      } catch (_) {
-        // 超時或網路錯誤 → 固定回退文案
+      } catch (error) {
+        console.warn("[pet] generate request failed:", error);
+        serviceUnavailable = true;
       }
 
       try {
         loadingBubble.remove();
+        if (serviceUnavailable) {
+          reply += "\n\n目前對話服務暫時無法正常回應，請稍後再試。";
+        }
         if (isCrisisMode) {
           const phaseChanged = petLastSafetyMode === "crisis"
             && !!petLastCrisisPhase
@@ -5210,16 +5213,13 @@
         } else {
           petAppend("pet", reply);
         }
-        petSpeakText(reply, {
-          emotion: petCurrentEmotion,
-          isCrisisMode,
-        });
+        let spokenReply = reply;
         petLastSafetyMode = isCrisisMode ? "crisis" : "normal";
         petLastCrisisPhase = isCrisisMode ? crisisPhase : "";
         petRecordAssistantMessage(reply);
 
         if (!isCrisisMode && acceptedStressSupport && hasStressAssessment) {
-          petAppendStressSensorLink();
+          spokenReply += `\n\n${petAppendStressSensorLink()}`;
         } else if (
           !isCrisisMode
           && stressSupportSuggested
@@ -5230,11 +5230,9 @@
           petStressSupportPending = true;
           petAppend("pet", checkIn);
           petRecordAssistantMessage(checkIn);
-          petSpeakText(checkIn, {
-            emotion: petCurrentEmotion,
-            isCrisisMode: false,
-          });
+          spokenReply += `\n\n${checkIn}`;
         }
+        petSpeakText(spokenReply, { emotion: petCurrentEmotion, isCrisisMode });
       } finally {
         petWaiting = false;
         petSendBtn.disabled = false;

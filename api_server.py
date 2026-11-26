@@ -345,6 +345,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
     client = _get_gemini_client()
     if client is None:
         raise RuntimeError("gemini_unavailable")
+    deadline = time.monotonic() + 18.0
     configured_model = str(os.environ.get("GEMINI_MODEL", "")).strip()
     model_candidates = []
     for candidate in ["gemini-3.6-flash", configured_model, "gemini-3.5-flash-lite", "gemini-3.5-flash"]:
@@ -369,6 +370,9 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
     last_error: Exception | None = None
     for model_name in model_candidates:
         for attempt in range(3):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("gemini_request_deadline_exceeded") from last_error
             try:
                 response = client.models.generate_content(
                     model=model_name,
@@ -377,6 +381,10 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
                         "max_output_tokens": max_tokens,
                         "temperature": temperature,
                         "system_instruction": system_instruction,
+                        "http_options": {
+                            "timeout": max(1, int(min(12.0, remaining) * 1000)),
+                            "retry_options": {"attempts": 1},
+                        },
                     },
                 )
                 text = getattr(response, "text", None)
@@ -400,7 +408,10 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
                 if invalid_model:
                     break
                 if transient and attempt < 2:
-                    time.sleep(1.5 * (attempt + 1))
+                    delay = 1.5 * (attempt + 1)
+                    if deadline - time.monotonic() <= delay:
+                        raise TimeoutError("gemini_request_deadline_exceeded") from exc
+                    time.sleep(delay)
                     continue
                 if transient:
                     break
@@ -4187,18 +4198,6 @@ def generate():
     active_prompt_version = _get_active_agent_prompt_version()
     fallback_reply = _build_fallback_reply(emotion, persona)
 
-    client = _get_gemini_client() or _get_groq_client()
-    if client is None:
-        observability = _agent_build_turn_observability(
-            memories_rows=[],
-            tool_results=[],
-            latency_ms=int((time.perf_counter() - request_started) * 1000),
-            fallback_used=True,
-            fallback_reason="llm_unavailable",
-            prompt_version=active_prompt_version,
-        )
-        return jsonify({"error": "llm_unavailable", "fallback": fallback_reply, "observability": observability}), 503
-
     # 驗證 messages：只取 role/content，限長度
     raw_messages = payload.get("messages", [])
     if not isinstance(raw_messages, list):
@@ -4294,6 +4293,23 @@ def generate():
         })
 
     stress_support_suggested = _should_offer_stress_sensor(clean_messages)
+
+    client = _get_gemini_client() or _get_groq_client()
+    if client is None:
+        observability = _agent_build_turn_observability(
+            memories_rows=[],
+            tool_results=[],
+            latency_ms=int((time.perf_counter() - request_started) * 1000),
+            fallback_used=True,
+            fallback_reason="llm_unavailable",
+            prompt_version=active_prompt_version,
+        )
+        return jsonify({
+            "error": "llm_unavailable",
+            "fallback": fallback_reply,
+            "stress_support_suggested": stress_support_suggested,
+            "observability": observability,
+        }), 503
 
     # 在 system prompt 後插入當次情緒脈絡（結構化，不直接拼接用戶輸入）
     emotion_context = f"[本次掃描偵測到的情緒（僅供參考）：{emotion}]"
