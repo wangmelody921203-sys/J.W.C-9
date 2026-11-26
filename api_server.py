@@ -408,8 +408,9 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
                     break
                 message = str(exc).lower()
                 transient = "503" in message or "unavailable" in message or "high demand" in message or "429" in message or "rate limit" in message or "incomplete_gemini_response" in message
-                invalid_model = "not found" in message or "not supported" in message or ("model" in message and "invalid" in message)
+                invalid_model = getattr(exc, "code", None) == 404 or "not found" in message or "not supported" in message or ("model" in message and "invalid" in message)
                 if invalid_model:
+                    app.logger.warning("Gemini model %s is unavailable; trying the next model", model_name)
                     break
                 if transient and attempt < 2:
                     delay = 1.5 * (attempt + 1)

@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from google.genai.errors import ServerError
+from google.genai.errors import ClientError, ServerError
 
 from api_server import app, _call_gemini_chat, _call_groq_chat_with_fallback, _is_complete_agent_reply, _should_offer_stress_sensor
 
@@ -48,6 +48,20 @@ class GeminiTimeoutTests(unittest.TestCase):
         self.assertEqual(reply, "我在這裡陪你。")
         self.assertEqual(model, "gemini-3.5-flash-lite")
         self.assertEqual(client.models.generate_content.call_count, 2)
+
+    def test_deadline_then_retired_configured_model_tries_next_model(self) -> None:
+        client = Mock()
+        client.models.generate_content.side_effect = [
+            ServerError(504, {"error": {"code": 504, "message": "Deadline expired"}}),
+            ClientError(404, {"error": {"code": 404, "message": "This model is no longer available", "status": "NOT_FOUND"}}),
+            SimpleNamespace(text="我在這裡陪你。", candidates=[]),
+        ]
+        with patch("api_server._get_gemini_client", return_value=client), \
+             patch.dict("os.environ", {"GEMINI_MODEL": "retired-model"}), \
+             patch("api_server.time.monotonic", side_effect=[0, 0, 12, 12.1]):
+            reply, model = _call_gemini_chat(messages=[{"role": "user", "content": "你好"}])
+        self.assertEqual(reply, "我在這裡陪你。")
+        self.assertEqual(model, "gemini-3.5-flash-lite")
 
     def test_request_has_bounded_timeout_and_disables_sdk_retries(self) -> None:
         client = Mock()
