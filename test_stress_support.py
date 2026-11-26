@@ -2,6 +2,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from google.genai.errors import ServerError
+
 from api_server import app, _call_gemini_chat, _call_groq_chat_with_fallback, _is_complete_agent_reply, _should_offer_stress_sensor
 
 
@@ -33,6 +35,20 @@ class StressSupportSignalTests(unittest.TestCase):
 
 
 class GeminiTimeoutTests(unittest.TestCase):
+    def test_deadline_exceeded_tries_next_model_within_budget(self) -> None:
+        client = Mock()
+        client.models.generate_content.side_effect = [
+            ServerError(504, {"error": {"code": 504, "message": "Deadline expired"}}),
+            SimpleNamespace(text="我在這裡陪你。", candidates=[]),
+        ]
+        with patch("api_server._get_gemini_client", return_value=client), \
+             patch.dict("os.environ", {"GEMINI_MODEL": ""}), \
+             patch("api_server.time.monotonic", side_effect=[0, 0, 12]):
+            reply, model = _call_gemini_chat(messages=[{"role": "user", "content": "你好"}])
+        self.assertEqual(reply, "我在這裡陪你。")
+        self.assertEqual(model, "gemini-3.5-flash-lite")
+        self.assertEqual(client.models.generate_content.call_count, 2)
+
     def test_request_has_bounded_timeout_and_disables_sdk_retries(self) -> None:
         client = Mock()
         client.models.generate_content.return_value.text = "我在這裡陪你。"
@@ -43,7 +59,7 @@ class GeminiTimeoutTests(unittest.TestCase):
         self.assertEqual(reply, "我在這裡陪你。")
         http_options = client.models.generate_content.call_args.kwargs["config"]["http_options"]
         self.assertGreater(http_options["timeout"], 0)
-        self.assertLessEqual(http_options["timeout"], 20000)
+        self.assertEqual(http_options["timeout"], 12000)
         self.assertEqual(http_options["retry_options"]["attempts"], 1)
 
     def test_network_timeout_is_not_retried(self) -> None:
@@ -82,6 +98,24 @@ class GeminiTimeoutTests(unittest.TestCase):
         self.assertEqual(data["error"], "gemini_error")
         self.assertTrue(data["stress_support_suggested"])
         self.assertIn("fallback", data)
+
+    def test_generate_returns_alternate_model_reply_after_504(self) -> None:
+        client = Mock()
+        client.models.generate_content.side_effect = [
+            ServerError(504, {"error": {"code": 504, "message": "Deadline expired"}}),
+            SimpleNamespace(text="我在這裡陪你。", candidates=[]),
+        ]
+        with patch("api_server._check_rate", return_value=True), \
+             patch("api_server._resolve_authed_user", return_value=(None, None, None)), \
+             patch("api_server._get_gemini_client", return_value=client), \
+             patch.dict("os.environ", {"GEMINI_MODEL": ""}):
+            response = app.test_client().post(
+                "/generate",
+                json={"messages": [{"role": "user", "content": "我最近壓力好大"}]},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["reply"], "我在這裡陪你。")
+        self.assertTrue(response.get_json()["stress_support_suggested"])
 
     def test_crisis_response_does_not_depend_on_llm_availability(self) -> None:
         with patch("api_server._check_rate", return_value=True), \

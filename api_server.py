@@ -382,7 +382,7 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
                         "temperature": temperature,
                         "system_instruction": system_instruction,
                         "http_options": {
-                            "timeout": int(min(20.0, remaining) * 1000),
+                            "timeout": 12000,
                             "retry_options": {"attempts": 1},
                         },
                     },
@@ -403,6 +403,9 @@ def _call_gemini_chat(*, messages: list[dict], max_tokens: int = 1200, temperatu
                 raise RuntimeError("incomplete_gemini_response")
             except Exception as exc:
                 last_error = exc
+                if getattr(exc, "code", None) == 504:
+                    app.logger.warning("Gemini model %s exceeded its deadline; trying the next model", model_name)
+                    break
                 message = str(exc).lower()
                 transient = "503" in message or "unavailable" in message or "high demand" in message or "429" in message or "rate limit" in message or "incomplete_gemini_response" in message
                 invalid_model = "not found" in message or "not supported" in message or ("model" in message and "invalid" in message)
