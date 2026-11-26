@@ -12,7 +12,7 @@ const float LED_SMOOTH_ALPHA = 0.20;
 
 // --- 時間窗口控制參數 ---
 unsigned long lastLogTime = 0;     // 記錄上一次發送數據的時間
-const unsigned long interval = 1000; // 設定每隔多久要算一次平均傳給電腦（1秒）
+const unsigned long interval = 200; // 每 0.2 秒輸出一次平均值，降低畫面延遲
 
 // --- 取樣累加變數 ---
 long sampleTotal = 0;       // 用來累加這 1 秒內所有讀取到的數值

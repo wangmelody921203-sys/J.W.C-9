@@ -457,12 +457,26 @@
       };
     }
 
-    async function reportSensorValue(value) {
+    let lastUploadAt = 0;
+    let uploadInFlight = false;
+
+    // 畫面即時更新；上傳不阻塞讀取，且最多每秒一次、前一筆未完成則略過，避免資料堆積造成延遲
+    function reportSensorValue(value) {
       const payload = payloadFromSensorValue(value);
       updateCards(payload);
       addPoint(payload);
       drawChart();
 
+      const now = Date.now();
+      if (uploadInFlight || now - lastUploadAt < 1000) return;
+      lastUploadAt = now;
+      uploadInFlight = true;
+      uploadSensorPayload(payload).finally(() => {
+        uploadInFlight = false;
+      });
+    }
+
+    async function uploadSensorPayload(payload) {
       const req = buildStressRequest();
       try {
         const response = await fetch(req.reportUrl, {
@@ -496,7 +510,7 @@
           for (const line of lines) {
             const match = line.trim().match(/^-?\d+$/);
             if (match) {
-              await reportSensorValue(Number(match[0]));
+              reportSensorValue(Number(match[0]));
             }
           }
         }
